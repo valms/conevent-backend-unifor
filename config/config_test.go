@@ -4,10 +4,12 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestLoadConfig(t *testing.T) {
-	// Set up environment variables
+	// Arrange
 	os.Setenv("SERVER_PORT", "8080")
 	os.Setenv("SERVER_READ_TIMEOUT", "10")
 	os.Setenv("SERVER_WRITE_TIMEOUT", "20")
@@ -33,48 +35,25 @@ func TestLoadConfig(t *testing.T) {
 		os.Unsetenv("DB_SSLMODE")
 	}()
 
+	// Act
 	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
 
-	// Validate server config
-	if cfg.Server.Port != "8080" {
-		t.Errorf("Expected Server.Port to be '8080', got '%s'", cfg.Server.Port)
-	}
-	if cfg.Server.ReadTimeout != 10*time.Second {
-		t.Errorf("Expected Server.ReadTimeout to be 10s, got '%v'", cfg.Server.ReadTimeout)
-	}
-	if cfg.Server.WriteTimeout != 20*time.Second {
-		t.Errorf("Expected Server.WriteTimeout to be 20s, got '%v'", cfg.Server.WriteTimeout)
-	}
-	if cfg.Server.IdleTimeout != 120*time.Second {
-		t.Errorf("Expected Server.IdleTimeout to be 120s, got '%v'", cfg.Server.IdleTimeout)
-	}
-
-	// Validate database config
-	if cfg.Database.Host != "testhost" {
-		t.Errorf("Expected Database.Host to be 'testhost', got '%s'", cfg.Database.Host)
-	}
-	if cfg.Database.Port != "5433" {
-		t.Errorf("Expected Database.Port to be '5433', got '%s'", cfg.Database.Port)
-	}
-	if cfg.Database.User != "testuser" {
-		t.Errorf("Expected Database.User to be 'testuser', got '%s'", cfg.Database.User)
-	}
-	if cfg.Database.Password != "testpass" {
-		t.Errorf("Expected Database.Password to be 'testpass', got '%s'", cfg.Database.Password)
-	}
-	if cfg.Database.Name != "testdb" {
-		t.Errorf("Expected Database.Name to be 'testdb', got '%s'", cfg.Database.Name)
-	}
-	if cfg.Database.SSLMode != "require" {
-		t.Errorf("Expected Database.SSLMode to be 'require', got '%s'", cfg.Database.SSLMode)
-	}
+	// Assert
+	assert.NoError(t, err, "Expected no error")
+	assert.Equal(t, "8080", cfg.Server.Port, "Expected Server.Port to be '8080'")
+	assert.Equal(t, 10*time.Second, cfg.Server.ReadTimeout, "Expected Server.ReadTimeout to be 10s")
+	assert.Equal(t, 20*time.Second, cfg.Server.WriteTimeout, "Expected Server.WriteTimeout to be 20s")
+	assert.Equal(t, 120*time.Second, cfg.Server.IdleTimeout, "Expected Server.IdleTimeout to be 120s")
+	assert.Equal(t, "testhost", cfg.Database.Host, "Expected Database.Host to be 'testhost'")
+	assert.Equal(t, "5433", cfg.Database.Port, "Expected Database.Port to be '5433'")
+	assert.Equal(t, "testuser", cfg.Database.User, "Expected Database.User to be 'testuser'")
+	assert.Equal(t, "testpass", cfg.Database.Password, "Expected Database.Password to be 'testpass'")
+	assert.Equal(t, "testdb", cfg.Database.Name, "Expected Database.Name to be 'testdb'")
+	assert.Equal(t, "require", cfg.Database.SSLMode, "Expected Database.SSLMode to be 'require'")
 }
 
 func TestLoadConfig_MissingRequired(t *testing.T) {
-	// Clear all DB-related env vars to test validation
+	// Arrange
 	originalHost := os.Getenv("DB_HOST")
 	originalPort := os.Getenv("DB_PORT")
 	originalUser := os.Getenv("DB_USER")
@@ -116,50 +95,118 @@ func TestLoadConfig_MissingRequired(t *testing.T) {
 		}
 	}()
 
+	// Act
 	cfg, err := LoadConfig()
-	if err == nil {
-		t.Fatalf("Expected error due to missing DB config, got cfg=%v", cfg)
-	}
-	if cfg != nil {
-		t.Fatalf("Expected nil config, got %v", cfg)
-	}
+
+	// Assert
+	assert.Error(t, err, "Expected error due to missing DB config")
+	assert.Nil(t, cfg, "Expected nil config")
 }
 
-func TestValidate_Success(t *testing.T) {
-	cfg := &Config{
-		Database: DatabaseConfig{
-			Host:     "localhost",
-			Port:     "5432",
-			User:     "postgres",
-			Password: "postgres",
-			Name:     "conevent",
-			SSLMode:  "disable",
+func TestValidate(t *testing.T) {
+	tests := []struct {
+		name          string
+		cfg           Config
+		expectedError string
+	}{
+		{
+			name: "valid config",
+			cfg: Config{
+				Database: DatabaseConfig{
+					Host:     "localhost",
+					Port:     "5432",
+					User:     "postgres",
+					Password: "postgres",
+					Name:     "conevent",
+					SSLMode:  "disable",
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "missing host",
+			cfg: Config{
+				Database: DatabaseConfig{
+					Host:     "",
+					Port:     "5432",
+					User:     "postgres",
+					Password: "postgres",
+					Name:     "conevent",
+					SSLMode:  "disable",
+				},
+			},
+			expectedError: "DB_HOST is required",
+		},
+		{
+			name: "missing port",
+			cfg: Config{
+				Database: DatabaseConfig{
+					Host:     "localhost",
+					Port:     "",
+					User:     "postgres",
+					Password: "postgres",
+					Name:     "conevent",
+					SSLMode:  "disable",
+				},
+			},
+			expectedError: "DB_PORT is required",
+		},
+		{
+			name: "missing user",
+			cfg: Config{
+				Database: DatabaseConfig{
+					Host:     "localhost",
+					Port:     "5432",
+					User:     "",
+					Password: "postgres",
+					Name:     "conevent",
+					SSLMode:  "disable",
+				},
+			},
+			expectedError: "DB_USER is required",
+		},
+		{
+			name: "missing password",
+			cfg: Config{
+				Database: DatabaseConfig{
+					Host:     "localhost",
+					Port:     "5432",
+					User:     "postgres",
+					Password: "",
+					Name:     "conevent",
+					SSLMode:  "disable",
+				},
+			},
+			expectedError: "DB_PASSWORD is required",
+		},
+		{
+			name: "missing name",
+			cfg: Config{
+				Database: DatabaseConfig{
+					Host:     "localhost",
+					Port:     "5432",
+					User:     "postgres",
+					Password: "postgres",
+					Name:     "",
+					SSLMode:  "disable",
+				},
+			},
+			expectedError: "DB_NAME is required",
 		},
 	}
 
-	if err := cfg.validate(); err != nil {
-		t.Fatalf("Expected no validation error, got %v", err)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			err := tt.cfg.validate()
 
-func TestValidate_MissingHost(t *testing.T) {
-	cfg := &Config{
-		Database: DatabaseConfig{
-			Host:     "", // Missing
-			Port:     "5432",
-			User:     "postgres",
-			Password: "postgres",
-			Name:     "conevent",
-			SSLMode:  "disable",
-		},
-	}
-
-	err := cfg.validate()
-	if err == nil {
-		t.Fatalf("Expected validation error for missing host")
-		return
-	}
-	if err.Error() != "DB_HOST is required" {
-		t.Errorf("Expected error 'DB_HOST is required', got '%v'", err)
+			// Assert
+			if tt.expectedError == "" {
+				assert.NoError(t, err, "Expected no error")
+			} else {
+				assert.Error(t, err, "Expected validation error")
+				assert.Equal(t, tt.expectedError, err.Error(), "Expected specific error message")
+			}
+		})
 	}
 }
