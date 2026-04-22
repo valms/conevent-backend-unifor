@@ -1,5 +1,12 @@
 .idea
-
 *.iml
 
-AGENTS.md
+# Environment variables - keep .env out, but include .env.example as template
+.env
+
+# Coverage output files
+coverage.out
+
+# Dependency directories
+vendor/
+```
