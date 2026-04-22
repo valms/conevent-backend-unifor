@@ -1,13 +1,13 @@
 package api
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHealthCheck(t *testing.T) {
@@ -20,21 +20,14 @@ func TestHealthCheck(t *testing.T) {
 
 	// Serve the request using Fiber's test interface
 	respFiber, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Error during test: %v", err)
-	}
+	assert.NoError(t, err, "Expected no error when testing handler")
 
-	// Check the response
-	if respFiber.StatusCode != http.StatusOK {
-		t.Errorf("Expected status %d, got %d", http.StatusOK, respFiber.StatusCode)
-	}
+	// Check the response status code
+	assert.Equal(t, http.StatusOK, respFiber.StatusCode, "Expected HTTP OK status")
 
+	// Read and check the response body
 	bodyBytes, _ := io.ReadAll(respFiber.Body)
 	body := string(bodyBytes)
-	if !bytes.Contains([]byte(body), []byte(`"status":"ok"`)) {
-		t.Errorf("Expected response to contain 'status\":\"ok\"', got %s", body)
-	}
-	if !bytes.Contains([]byte(body), []byte(`"message":"Conevent API is running"`)) {
-		t.Errorf("Expected response to contain 'message\":\"Conevent API is running\"', got %s", body)
-	}
+	assert.Contains(t, body, `"status":"ok"`, "Expected response to contain 'status\":\"ok\"'")
+	assert.Contains(t, body, `"message":"Conevent API is running"`, "Expected response to contain 'message\":\"Conevent API is running\"'")
 }
