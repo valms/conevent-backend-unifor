@@ -23,16 +23,23 @@ func TestLoadConfig(t *testing.T) {
 
 	defer func() {
 		// Clean up
-		os.Unsetenv("SERVER_PORT")
-		os.Unsetenv("SERVER_READ_TIMEOUT")
-		os.Unsetenv("SERVER_WRITE_TIMEOUT")
-		os.Unsetenv("SERVER_IDLE_TIMEOUT")
-		os.Unsetenv("DB_HOST")
-		os.Unsetenv("DB_PORT")
-		os.Unsetenv("DB_USER")
-		os.Unsetenv("DB_PASSWORD")
-		os.Unsetenv("DB_NAME")
-		os.Unsetenv("DB_SSLMODE")
+		vars := []string{
+			"SERVER_PORT",
+			"SERVER_READ_TIMEOUT",
+			"SERVER_WRITE_TIMEOUT",
+			"SERVER_IDLE_TIMEOUT",
+			"DB_HOST",
+			"DB_PORT",
+			"DB_USER",
+			"DB_PASSWORD",
+			"DB_NAME",
+			"DB_SSLMODE",
+		}
+		for _, v := range vars {
+			if err := os.Unsetenv(v); err != nil {
+				t.Fatalf("failed to unset %s: %v", v, err)
+			}
+		}
 	}()
 
 	// Act
@@ -69,29 +76,49 @@ func TestLoadConfig_MissingRequired(t *testing.T) {
 	defer func() {
 		// Restore original values
 		if originalHost != "" {
-			os.Setenv("DB_HOST", originalHost)
+			if err := os.Setenv("DB_HOST", originalHost); err != nil {
+				t.Fatalf("failed to set DB_HOST: %v", err)
+			}
 		} else {
-			os.Unsetenv("DB_HOST")
+			if err := os.Unsetenv("DB_HOST"); err != nil {
+				t.Fatalf("failed to unset DB_HOST: %v", err)
+			}
 		}
 		if originalPort != "" {
-			os.Setenv("DB_PORT", originalPort)
+			if err := os.Setenv("DB_PORT", originalPort); err != nil {
+				t.Fatalf("failed to set DB_PORT: %v", err)
+			}
 		} else {
-			os.Unsetenv("DB_PORT")
+			if err := os.Unsetenv("DB_PORT"); err != nil {
+				t.Fatalf("failed to unset DB_PORT: %v", err)
+			}
 		}
 		if originalUser != "" {
-			os.Setenv("DB_USER", originalUser)
+			if err := os.Setenv("DB_USER", originalUser); err != nil {
+				t.Fatalf("failed to set DB_USER: %v", err)
+			}
 		} else {
-			os.Unsetenv("DB_USER")
+			if err := os.Unsetenv("DB_USER"); err != nil {
+				t.Fatalf("failed to unset DB_USER: %v", err)
+			}
 		}
 		if originalPassword != "" {
-			os.Setenv("DB_PASSWORD", originalPassword)
+			if err := os.Setenv("DB_PASSWORD", originalPassword); err != nil {
+				t.Fatalf("failed to set DB_PASSWORD: %v", err)
+			}
 		} else {
-			os.Unsetenv("DB_PASSWORD")
+			if err := os.Unsetenv("DB_PASSWORD"); err != nil {
+				t.Fatalf("failed to unset DB_PASSWORD: %v", err)
+			}
 		}
 		if originalName != "" {
-			os.Setenv("DB_NAME", originalName)
+			if err := os.Setenv("DB_NAME", originalName); err != nil {
+				t.Fatalf("failed to set DB_NAME: %v", err)
+			}
 		} else {
-			os.Unsetenv("DB_NAME")
+			if err := os.Unsetenv("DB_NAME"); err != nil {
+				t.Fatalf("failed to unset DB_NAME: %v", err)
+			}
 		}
 	}()
 

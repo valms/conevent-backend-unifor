@@ -1,0 +1,313 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"math/big"
+	"time"
+
+	"conevent-backend/internal/db"
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+// EventService defines the interface for event-related operations
+type EventService interface {
+	// GetEvent returns an event by ID
+	GetEvent(eventID string) (*Event, error)
+	// ListEvents returns a list of events
+	ListEvents() ([]*Event, error)
+	// CreateEvent creates a new event
+	CreateEvent(event *Event) error
+	// UpdateEvent updates an existing event
+	UpdateEvent(event *Event) error
+	// DeleteEvent deletes an event by ID
+	DeleteEvent(eventID string) error
+}
+
+// Event represents an event in the system
+type Event struct {
+	// ID is the unique identifier for the event
+	ID string
+	// Name is the name of the event
+	Name string
+	// IniDate is the start date of the event (in YYYY-MM-DD format)
+	IniDate string
+	// EndDate is the end date of the event (in YYYY-MM-DD format)
+	EndDate string
+	// IniTime is the start time of the event (in HH:MM format)
+	IniTime string
+	// EndTime is the end time of the event (in HH:MM format)
+	EndTime string
+	// Location is where the event takes place
+	Location string
+	// Budget is the event budget
+	Budget float64
+	// Status is the current status of the event (Planejamento, Confirmado, Concluído, Cancelado)
+	Status string
+	// CreatedAt is the timestamp when the event was created (in RFC3339 format)
+	CreatedAt string
+}
+
+// error definitions
+var (
+	ErrEventInvalid = errors.New("invalid event data")
+)
+
+// eventService implements EventService using database operations
+type eventService struct {
+	querier db.Querier
+}
+
+// NewEventService creates a new EventService instance
+func NewEventService(querier db.Querier) EventService {
+	return &eventService{querier: querier}
+}
+
+// GetEvent returns an event by ID
+func (s *eventService) GetEvent(eventID string) (*Event, error) {
+	event, err := s.querier.GetEvent(context.Background(), eventID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Event{
+		ID:        event.ID.String(),
+		Name:      event.Name,
+		IniDate:   event.IniDate.Time.Format("2006-01-02"),
+		EndDate:   event.EndDate.Time.Format("2006-01-02"),
+		IniTime:   event.IniTime.Time.Format("15:04"),
+		EndTime:   event.EndTime.Time.Format("15:04"),
+		Location:  event.Location,
+		Budget:    event.Budget.Float64(),
+		Status:    event.Status,
+		CreatedAt: event.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+// ListEvents returns a list of events
+func (s *eventService) ListEvents() ([]*Event, error) {
+	events, err := s.querier.ListEvents(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*Event, 0, len(events))
+	for _, event := range events {
+		result = append(result, &Event{
+			ID:        event.ID.String(),
+			Name:      event.Name,
+			IniDate:   event.IniDate.Time.Format("2006-01-02"),
+			EndDate:   event.EndDate.Time.Format("2006-01-02"),
+			IniTime:   event.IniTime.Time.Format("15:04"),
+			EndTime:   event.EndTime.Time.Format("15:04"),
+			Location:  event.Location,
+			Budget:    event.Budget.Float64(),
+			Status:    event.Status,
+			CreatedAt: event.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+
+	return result, nil
+}
+
+// CreateEvent creates a new event
+func (s *eventService) CreateEvent(event *Event) error {
+	// Validate required fields
+	if event.Name == "" || event.IniDate == "" || event.EndDate == "" ||
+		event.IniTime == "" || event.EndTime == "" || event.Location == "" ||
+		event.Status == "" {
+		return ErrEventInvalid
+	}
+
+	// Parse date values
+	iniDateTime, err := time.Parse("2006-01-02", event.IniDate)
+	if err != nil {
+		return err
+	}
+	endDateTime, err := time.Parse("2006-01-02", event.EndDate)
+	if err != nil {
+		return err
+	}
+
+	// Parse time values
+	iniTimeParsed, err := time.Parse("15:04", event.IniTime)
+	if err != nil {
+		return err
+	}
+	endTimeParsed, err := time.Parse("15:04", event.EndTime)
+	if err != nil {
+		return err
+	}
+
+	// Convert to pgtype values
+	iniDate := pgtype.Date{Time: iniDateTime, Valid: true}
+	endDate := pgtype.Date{Time: endDateTime, Valid: true}
+	iniTime := pgtype.Time{Microseconds: int64(iniTimeParsed.Hour()*3600+iniTimeParsed.Minute()*60) * 1000000, Valid: true}
+	endTime := pgtype.Time{Microseconds: int64(endTimeParsed.Hour()*3600+endTimeParsed.Minute()*60) * 1000000, Valid: true}
+
+	// Convert budget to pgtype.Numeric (assuming 2 decimal places)
+	budgetInt := new(big.Int).Mul(big.NewInt(int64(event.Budget*100)), big.NewInt(1))
+	budget := pgtype.Numeric{Int: budgetInt, Exp: -2, Valid: true}
+
+	dbEvent := db.CreateEventParams{
+		Name:     event.Name,
+		IniDate:  iniDate,
+		EndDate:  endDate,
+		IniTime:  iniTime,
+		EndTime:  endTime,
+		Location: event.Location,
+		Budget:   budget,
+		Status:   event.Status,
+	}
+
+	_, err = s.querier.CreateEvent(context.Background(), dbEvent)
+	return err
+}
+
+// UpdateEvent updates an existing event
+func (s *eventService) UpdateEvent(event *Event) error {
+	if event.ID == "" {
+		return ErrEventInvalid
+	}
+
+	// Parse UUID
+	var idBytes [16]byte
+	if len(event.ID) == 36 {
+		// Standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+		if len(event.ID) != 36 {
+			return ErrEventInvalid
+		}
+		// Remove hyphens
+		hexStr := event.ID[0:8] + event.ID[9:13] + event.ID[14:18] + event.ID[19:23] + event.ID[24:]
+		if len(hexStr) != 32 {
+			return ErrEventInvalid
+		}
+		// Decode hex
+		if _, err := hex.Decode(idBytes[:], []byte(hexStr)); err != nil {
+			return ErrEventInvalid
+		}
+	} else if len(event.ID) == 32 {
+		// Compact UUID format
+		if _, err := hex.Decode(idBytes[:], []byte(event.ID)); err != nil {
+			return ErrEventInvalid
+		}
+	} else {
+		return ErrEventInvalid
+	}
+	id := pgtype.UUID{Bytes: idBytes, Valid: true}
+
+	// Parse date values
+	iniDateTime, err := time.Parse("2006-01-02", event.IniDate)
+	if err != nil {
+		return err
+	}
+	endDateTime, err := time.Parse("2006-01-02", event.EndDate)
+	if err != nil {
+		return err
+	}
+
+	// Parse time values
+	iniTimeParsed, err := time.Parse("15:04", event.IniTime)
+	if err != nil {
+		return err
+	}
+	endTimeParsed, err := time.Parse("15:04", event.EndTime)
+	if err != nil {
+		return err
+	}
+
+	// Convert to pgtype values
+	iniDate := pgtype.Date{Time: iniDateTime, Valid: true}
+	endDate := pgtype.Date{Time: endDateTime, Valid: true}
+	iniTime := pgtype.Time{Microseconds: int64(iniTimeParsed.Hour()*3600+iniTimeParsed.Minute()*60) * 1000000, Valid: true}
+	endTime := pgtype.Time{Microseconds: int64(endTimeParsed.Hour()*3600+endTimeParsed.Minute()*60) * 1000000, Valid: true}
+
+	// Convert budget to pgtype.Numeric (assuming 2 decimal places)
+	budgetInt := new(big.Int).Mul(big.NewInt(int64(event.Budget*100)), big.NewInt(1))
+	budget := pgtype.Numeric{Int: budgetInt, Exp: -2, Valid: true}
+
+	dbEvent := db.UpdateEventParams{
+		ID:       id,
+		Name:     event.Name,
+		IniDate:  iniDate,
+		EndDate:  endDate,
+		IniTime:  iniTime,
+		EndTime:  endTime,
+		Location: event.Location,
+		Budget:   budget,
+		Status:   event.Status,
+	}
+
+	_, err = s.querier.UpdateEvent(context.Background(), dbEvent)
+	return err
+}
+
+// DeleteEvent deletes an event by ID
+func (s *eventService) DeleteEvent(eventID string) error {
+	if eventID == "" {
+		return ErrEventInvalid
+	}
+
+	// Parse UUID (same logic as in UpdateEvent)
+	var idBytes [16]byte
+	if len(eventID) == 36 {
+		// Standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+		if len(eventID) != 36 {
+			return ErrEventInvalid
+		}
+		// Remove hyphens
+		hexStr := eventID[0:8] + eventID[9:13] + eventID[14:18] + eventID[19:23] + eventID[24:]
+		if len(hexStr) != 32 {
+			return ErrEventInvalid
+		}
+		// Decode hex
+		if _, err := hex.Decode(idBytes[:], []byte(hexStr)); err != nil {
+			return ErrEventInvalid
+		}
+	} else if len(eventID) == 32 {
+		// Compact UUID format
+		if _, err := hex.Decode(idBytes[:], []byte(eventID)); err != nil {
+			return ErrEventInvalid
+		}
+	} else {
+		return ErrEventInvalid
+	}
+	id := pgtype.UUID{Bytes: idBytes, Valid: true}
+
+	return s.querier.DeleteEvent(context.Background(), id)
+}
+
+// Helper function to decode hex string
+func hexDecode(dst []byte, src []byte) (int, error) {
+	if len(src)%2 != 0 {
+		return 0, errors.New("hex string length must be even")
+	}
+	if len(dst) < len(src)/2 {
+		return 0, errors.New("buffer too small")
+	}
+	for i := 0; i < len(src); i += 2 {
+		h := hexToByte(src[i])
+		if h == 0xff {
+			return 0, errors.New("invalid hex digit: " + string(src[i]))
+		}
+		l := hexToByte(src[i+1])
+		if l == 0xff {
+			return 0, errors.New("invalid hex digit: " + string(src[i+1]))
+		}
+		dst[i/2] = h<<4 | l
+	}
+	return len(src) / 2, nil
+}
+
+// Helper function to convert hex character to value
+func hexToByte(c byte) byte {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0'
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10
+	}
+	return 0xff
+}
