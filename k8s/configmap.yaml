@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: conevent-config
+  labels:
+    app: conevent
+data:
+  # Non-sensitive configuration
+  DB_HOST: "conevent-postgres"
+  DB_PORT: "5432"
+  DB_NAME: "conevent"
+  DB_SSLMODE: "disable"
+  SERVER_PORT: "3000"
+  SERVER_READ_TIMEOUT: "5"
+  SERVER_WRITE_TIMEOUT: "10"
+  SERVER_IDLE_TIMEOUT: "120"

@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
 	"conevent-backend/internal/db"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -55,32 +58,91 @@ var (
 
 // eventService implements EventService using database operations
 type eventService struct {
-	querier db.Querier
+	querier *db.Queries
 }
 
 // NewEventService creates a new EventService instance
-func NewEventService(querier db.Querier) EventService {
+func NewEventService(querier *db.Queries) EventService {
 	return &eventService{querier: querier}
 }
 
 // GetEvent returns an event by ID
 func (s *eventService) GetEvent(eventID string) (*Event, error) {
-	event, err := s.querier.GetEvent(context.Background(), eventID)
+	// Parse UUID
+	var idBytes [16]byte
+	if len(eventID) == 36 {
+		// Standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+		if len(eventID) != 36 {
+			return nil, ErrEventInvalid
+		}
+		// Remove hyphens
+		hexStr := eventID[0:8] + eventID[9:13] + eventID[14:18] + eventID[19:23] + eventID[24:]
+		if len(hexStr) != 32 {
+			return nil, ErrEventInvalid
+		}
+		// Decode hex
+		if _, err := hex.Decode(idBytes[:], []byte(hexStr)); err != nil {
+			return nil, ErrEventInvalid
+		}
+	} else if len(eventID) == 32 {
+		// Compact UUID format
+		if _, err := hex.Decode(idBytes[:], []byte(eventID)); err != nil {
+			return nil, ErrEventInvalid
+		}
+	} else {
+		return nil, ErrEventInvalid
+	}
+	id := pgtype.UUID{Bytes: idBytes, Valid: true}
+
+	event, err := s.querier.GetEvent(context.Background(), id)
 	if err != nil {
 		return nil, err
+	}
+
+	// Convert pgtype values to our API format
+	var iniDateStr, endDateStr, iniTimeStr, endTimeStr string
+	if event.IniDate.Valid {
+		iniDateStr = event.IniDate.Time.Format("2006-01-02")
+	}
+	if event.EndDate.Valid {
+		endDateStr = event.EndDate.Time.Format("2006-01-02")
+	}
+	if event.IniTime.Valid {
+		// Convert microseconds to HH:MM format
+		hours := event.IniTime.Microseconds / 3600000000
+		minutes := (event.IniTime.Microseconds % 3600000000) / 60000000
+		iniTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
+	}
+	if event.EndTime.Valid {
+		// Convert microseconds to HH:MM format
+		hours := event.EndTime.Microseconds / 3600000000
+		minutes := (event.EndTime.Microseconds % 3600000000) / 60000000
+		endTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
+	}
+	var budgetFloat64 float64
+	if event.Budget.Valid {
+		f8, err := event.Budget.Float64Value()
+		if err != nil {
+			return nil, err
+		}
+		budgetFloat64 = f8.Float64
+	}
+	var createdAtStr string
+	if event.CreatedAt.Valid {
+		createdAtStr = event.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
 	}
 
 	return &Event{
 		ID:        event.ID.String(),
 		Name:      event.Name,
-		IniDate:   event.IniDate.Time.Format("2006-01-02"),
-		EndDate:   event.EndDate.Time.Format("2006-01-02"),
-		IniTime:   event.IniTime.Time.Format("15:04"),
-		EndTime:   event.EndTime.Time.Format("15:04"),
+		IniDate:   iniDateStr,
+		EndDate:   endDateStr,
+		IniTime:   iniTimeStr,
+		EndTime:   endTimeStr,
 		Location:  event.Location,
-		Budget:    event.Budget.Float64(),
+		Budget:    budgetFloat64,
 		Status:    event.Status,
-		CreatedAt: event.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt: createdAtStr,
 	}, nil
 }
 
@@ -93,15 +155,38 @@ func (s *eventService) ListEvents() ([]*Event, error) {
 
 	result := make([]*Event, 0, len(events))
 	for _, event := range events {
+		// Convert microseconds to HH:MM format for times
+		var iniTimeStr, endTimeStr string
+		if event.IniTime.Valid {
+			hours := event.IniTime.Microseconds / 3600000000
+			minutes := (event.IniTime.Microseconds % 3600000000) / 60000000
+			iniTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
+		}
+		if event.EndTime.Valid {
+			hours := event.EndTime.Microseconds / 3600000000
+			minutes := (event.EndTime.Microseconds % 3600000000) / 60000000
+			endTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
+		}
+
+		// Convert Numeric to float64
+		var budgetFloat64 float64
+		if event.Budget.Valid {
+			f8, err := event.Budget.Float64Value()
+			if err != nil {
+				return nil, err
+			}
+			budgetFloat64 = f8.Float64
+		}
+
 		result = append(result, &Event{
 			ID:        event.ID.String(),
 			Name:      event.Name,
 			IniDate:   event.IniDate.Time.Format("2006-01-02"),
 			EndDate:   event.EndDate.Time.Format("2006-01-02"),
-			IniTime:   event.IniTime.Time.Format("15:04"),
-			EndTime:   event.EndTime.Time.Format("15:04"),
+			IniTime:   iniTimeStr,
+			EndTime:   endTimeStr,
 			Location:  event.Location,
-			Budget:    event.Budget.Float64(),
+			Budget:    budgetFloat64,
 			Status:    event.Status,
 			CreatedAt: event.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
 		})
@@ -160,8 +245,56 @@ func (s *eventService) CreateEvent(event *Event) error {
 		Status:   event.Status,
 	}
 
-	_, err = s.querier.CreateEvent(context.Background(), dbEvent)
-	return err
+	createdEvent, err := s.querier.CreateEvent(context.Background(), dbEvent)
+	if err != nil {
+		return err
+	}
+
+	// Convert pgtype values to our API format
+	var iniDateStr, endDateStr, iniTimeStr, endTimeStr string
+	if createdEvent.IniDate.Valid {
+		iniDateStr = createdEvent.IniDate.Time.Format("2006-01-02")
+	}
+	if createdEvent.EndDate.Valid {
+		endDateStr = createdEvent.EndDate.Time.Format("2006-01-02")
+	}
+	if createdEvent.IniTime.Valid {
+		// Convert microseconds to HH:MM format
+		hours := createdEvent.IniTime.Microseconds / 3600000000
+		minutes := (createdEvent.IniTime.Microseconds % 3600000000) / 60000000
+		iniTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
+	}
+	if createdEvent.EndTime.Valid {
+		// Convert microseconds to HH:MM format
+		hours := createdEvent.EndTime.Microseconds / 3600000000
+		minutes := (createdEvent.EndTime.Microseconds % 3600000000) / 60000000
+		endTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
+	}
+	var budgetFloat64 float64
+	if createdEvent.Budget.Valid {
+		f8, err := createdEvent.Budget.Float64Value()
+		if err != nil {
+			return err
+		}
+		budgetFloat64 = f8.Float64
+	}
+	var createdAtStr string
+	if createdEvent.CreatedAt.Valid {
+		createdAtStr = createdEvent.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+	}
+
+	// Update the event with the created values
+	event.ID = createdEvent.ID.String()
+	event.IniDate = iniDateStr
+	event.EndDate = endDateStr
+	event.IniTime = iniTimeStr
+	event.EndTime = endTimeStr
+	event.Location = createdEvent.Location
+	event.Budget = budgetFloat64
+	event.Status = createdEvent.Status
+	event.CreatedAt = createdAtStr
+
+	return nil
 }
 
 // UpdateEvent updates an existing event

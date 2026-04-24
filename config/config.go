@@ -14,6 +14,13 @@ type Config struct {
 	Database DatabaseConfig
 }
 
+// DatabaseURL returns the formatted PostgreSQL connection string
+func (c *Config) DatabaseURL() string {
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		c.Database.Host, c.Database.Port, c.Database.User, c.Database.Password,
+		c.Database.Name, c.Database.SSLMode)
+}
+
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
 	Port         string

@@ -1,0 +1,155 @@
+{
+  "_type": "workspace",
+  "_id": "wsp_abc123",
+  "name": "Conevent API Collection",
+  "description": "API endpoints for Conevent backend service",
+  "modified": 1713926400000,
+  "created": 1713926400000,
+  "environments": [
+    {
+      "_type": "environment",
+      "_id": "env_dev",
+      "name": "Development",
+      "data": {
+        "BASE_URL": "http://localhost:3000"
+      },
+      "modified": 1713926400000,
+      "created": 1713926400000
+    }
+  ],
+  "resources": [
+    {
+      "_type": "request",
+      "_id": "req_health_check",
+      "name": "Health Check",
+      "description": "Check if the API is running",
+      "url": "{{ BASE_URL }}/health",
+      "method": "GET",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "disabled": false
+        }
+      ],
+      "data": [],
+      "dataMode": "none",
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "_type": "request",
+      "_id": "req_list_events",
+      "name": "List Events",
+      "description": "Get all events",
+      "url": "{{ BASE_URL }}/events",
+      "method": "GET",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "disabled": false
+        }
+      ],
+      "data": [],
+      "dataMode": "none",
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "_type": "request",
+      "_id": "req_create_event",
+      "name": "Create Event",
+      "description": "Create a new event",
+      "url": "{{ BASE_URL }}/events",
+      "method": "POST",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "disabled": false
+        }
+      ],
+      "data": [
+        {
+          "name": "",
+          "value": "{\n  \"title\": \"Tech Conference 2026\",\n  \"description\": \"Annual technology conference\",\n  \"date\": \"2026-10-15T09:00:00Z\",\n  \"location\": \"Convention Center\",\n  \"capacity\": 500\n}",
+          "enabled": true
+        }
+      ],
+      "dataMode": "raw",
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "_type": "request",
+      "_id": "req_get_event",
+      "name": "Get Event by ID",
+      "description": "Retrieve a specific event by ID",
+      "url": "{{ BASE_URL }}/events/{{ EVENT_ID }}",
+      "method": "GET",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "disabled": false
+        }
+      ],
+      "data": [],
+      "dataMode": "none",
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "_type": "request",
+      "_id": "req_update_event",
+      "name": "Update Event",
+      "description": "Update an existing event",
+      "url": "{{ BASE_URL }}/events/{{ EVENT_ID }}",
+      "method": "PUT",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "disabled": false
+        }
+      ],
+      "data": [
+        {
+          "name": "",
+          "value": "{\n  \"title\": \"Updated Tech Conference 2026\",\n  \"description\": \"Annual technology conference with workshops\",\n  \"date\": \"2026-10-16T09:00:00Z\",\n  \"location\": \"Convention Center Hall B\",\n  \"capacity\": 600\n}",
+          "enabled": true
+        }
+      ],
+      "dataMode": "raw",
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "_type": "request",
+      "_id": "req_delete_event",
+      "name": "Delete Event",
+      "description": "Delete an event by ID",
+      "url": "{{ BASE_URL }}/events/{{ EVENT_ID }}",
+      "method": "DELETE",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "disabled": false
+        }
+      ],
+      "data": [],
+      "dataMode": "none",
+      "auth": {
+        "type": "none"
+      }
+    }
+  ],
+  "sort": 0
+}

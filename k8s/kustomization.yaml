@@ -1,0 +1,8 @@
+resources:
+  - configmap.yaml
+  - secret.yaml
+  - postgres-service.yaml
+  - postgres-deployment.yaml
+  - initdb-configmap.yaml
+  - conevent-service.yaml
+  - conevent-deployment.yaml

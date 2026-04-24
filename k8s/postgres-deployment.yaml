@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conevent-postgres
+  labels:
+    app: conevent-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conevent-postgres
+  template:
+    metadata:
+      labels:
+        app: conevent-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: conevent-secret
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: conevent-secret
+              key: DB_PASSWORD
+        - name: POSTGRES_DB
+          value: "conevent"
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+          subPath: postgres
+      volumes:
+      - name: postgres-storage
+        emptyDir: {}
