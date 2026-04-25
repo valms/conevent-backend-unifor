@@ -42,13 +42,6 @@ golangci-lint run
 go mod tidy
 ```
 
-### Política de Linguagem (CRÍTICA)
-
-* **Código Fonte:** Todo o código (variáveis, funções, tipos, logs e comentários de código) **DEVE** ser escrito em *
-  *Inglês**.
-* **Documentação:** O `README.md` e a documentação de alto nível do projeto **DEVEM** ser escritos em **Português (
-  PT-BR)**.
-
 ## Licença
 
 Este projeto está licenciado sob os termos da licença MIT.

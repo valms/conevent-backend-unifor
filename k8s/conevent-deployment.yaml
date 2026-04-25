@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: conevent
-          image: conevent:latest
+          image: valmarjunior/conevent:v1
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -75,8 +75,8 @@ spec:
             httpGet:
               path: /health
               port: 3000
-            initialDelaySeconds: 10
-            periodSeconds: 10
+            initialDelaySeconds: 20
+            periodSeconds: 20
           livenessProbe:
             httpGet:
               path: /health
