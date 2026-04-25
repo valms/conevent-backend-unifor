@@ -36,6 +36,23 @@ spec:
             - name: postgres-storage
               mountPath: /var/lib/postgresql/data
               subPath: postgres
+        - name: postgres-exporter
+          image: prometheuscommunity/postgres-exporter
+          ports:
+            - containerPort: 9187
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://$(PGUSER):$(PGPASSWORD)@localhost:5432/conevent?sslmode=disable"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
       volumes:
         - name: postgres-storage
           persistentVolumeClaim:
