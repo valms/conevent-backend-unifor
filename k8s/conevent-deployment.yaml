@@ -1,0 +1,157 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conevent
+  labels:
+    app: conevent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conevent
+  template:
+    metadata:
+      labels:
+        app: conevent
+    spec:
+      containers:
+        - name: conevent
+          image: conevent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_NAME
+            - name: DB_SSLMODE
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_SSLMODE
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+            - name: SERVER_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: SERVER_PORT
+            - name: SERVER_READ_TIMEOUT
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: SERVER_READ_TIMEOUT
+            - name: SERVER_WRITE_TIMEOUT
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: SERVER_WRITE_TIMEOUT
+            - name: SERVER_IDLE_TIMEOUT
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: SERVER_IDLE_TIMEOUT
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      initContainers:
+        - name: init-db
+          image: postgres:15-alpine
+          command: [ 'sh', '-c', 'until pg_isready -h "$DB_HOST" -p "$DB_PORT"; do echo "Waiting for postgres"; sleep 2; done;' ]
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_PORT
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_NAME
+          volumeMounts:
+            - name: initdb-scripts
+              mountPath: /docker-entrypoint-initdb.d
+        - name: apply-migrations
+          image: postgres:15-alpine
+          command: [ 'sh', '-c', 'psql -h "$DB_HOST" -p "$DB_PORT" -U "$PGUSER" -d "$PGDATABASE" -f /docker-entrypoint-initdb.d/001-events.sql' ]
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_PORT
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_NAME
+          volumeMounts:
+            - name: initdb-scripts
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: initdb-scripts
+          configMap:
+            name: conevent-initdb
+            items:
+              - key: 001-events.sql
+                path: 001-events.sql
