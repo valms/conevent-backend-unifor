@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
         - name: conevent
-          image: valmarjunior/conevent:v1
-          imagePullPolicy: IfNotPresent
+          image: valmarjunior/conevent:v2.2
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
           env:

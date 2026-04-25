@@ -1,0 +1,13 @@
+.git
+.idea
+.env
+.env.example
+*.md
+k8s
+insomnia
+swagger.html
+openapi.yaml
+docker-compose.yml
+sqlc.yaml
+*_test.go
+conevent-backend.iml

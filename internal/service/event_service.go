@@ -29,29 +29,19 @@ type EventService interface {
 
 // Event represents an event in the system
 type Event struct {
-	// ID is the unique identifier for the event
-	ID string
-	// Name is the name of the event
-	Name string
-	// IniDate is the start date of the event (in YYYY-MM-DD format)
-	IniDate string
-	// EndDate is the end date of the event (in YYYY-MM-DD format)
-	EndDate string
-	// IniTime is the start time of the event (in HH:MM format)
-	IniTime string
-	// EndTime is the end time of the event (in HH:MM format)
-	EndTime string
-	// Location is where the event takes place
-	Location string
-	// Budget is the event budget
-	Budget float64
-	// Status is the current status of the event (Planejamento, Confirmado, Concluído, Cancelado)
-	Status string
-	// CreatedAt is the timestamp when the event was created (in RFC3339 format)
-	CreatedAt string
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	IniDate   string  `json:"iniDate"`
+	EndDate   string  `json:"endDate"`
+	IniTime   string  `json:"iniTime"`
+	EndTime   string  `json:"endTime"`
+	Location  string  `json:"location"`
+	Budget    float64 `json:"budget"`
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"createdAt"`
 }
 
-// error definitions
+// ErrEventInvalid error definitions
 var (
 	ErrEventInvalid = errors.New("invalid event data")
 )
