@@ -14,5 +14,6 @@ resources:
   - grafana-deployment.yaml
   - grafana-service.yaml
   - loki-deployment.yaml
+  - promtail-config.yaml
   - promtail-daemonset.yaml
   - grafana-dashboard-provider.yaml
