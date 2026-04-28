@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -52,7 +53,9 @@ type DatabaseConfig struct {
 // LoadConfig loads configuration from environment variables
 func LoadConfig() (*Config, error) {
 	// Load .env file if it exists (for development)
-	godotenv.Load()
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to load .env file: %w", err)
+	}
 
 	cfg := &Config{
 		Server: ServerConfig{
@@ -123,9 +126,8 @@ func getEnv(key, defaultValue string) string {
 // getEnvAsInt gets an environment variable as integer or returns a default value
 func getEnvAsInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
-		var result int
-		fmt.Sscanf(value, "%d", &result)
-		if result != 0 {
+		result, err := strconv.Atoi(value)
+		if err == nil && result > 0 {
 			return result
 		}
 	}

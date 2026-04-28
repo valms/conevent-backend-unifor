@@ -39,9 +39,7 @@ func InitCustomMetrics(serviceName string) error {
 		metric.WithDescription("Total number of HTTP requests"),
 		metric.WithUnit("{request}"),
 	)
-	if err != nil {
-		return err
-	}
+	errs := []error{err}
 
 	httpRequestDuration, err = meter.Float64Histogram(
 		"app.http.request.duration",
@@ -49,25 +47,22 @@ func InitCustomMetrics(serviceName string) error {
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
 	)
-	if err != nil {
-		return err
-	}
+	errs = append(errs, err)
 
 	httpActiveRequests, err = meter.Int64UpDownCounter(
 		"app.http.active_requests",
 		metric.WithDescription("Number of active HTTP requests"),
 		metric.WithUnit("{request}"),
 	)
-	if err != nil {
-		return err
-	}
+	errs = append(errs, err)
 
 	appStartedAt, err = meter.Int64Gauge(
 		"app.started_at",
 		metric.WithDescription("Application start timestamp (Unix)"),
 		metric.WithUnit("{timestamp}"),
 	)
-	if err != nil {
+	errs = append(errs, err)
+	if err := firstError(errs...); err != nil {
 		return err
 	}
 
@@ -76,7 +71,28 @@ func InitCustomMetrics(serviceName string) error {
 	return nil
 }
 
+func firstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newFloat64Histogram(meter metric.Meter, name, description, unit string) (metric.Float64Histogram, error) {
+	return meter.Float64Histogram(name, metric.WithDescription(description), metric.WithUnit(unit))
+}
+
+func newInt64Counter(meter metric.Meter, name, description, unit string) (metric.Int64Counter, error) {
+	return meter.Int64Counter(name, metric.WithDescription(description), metric.WithUnit(unit))
+}
+
 func RecordRequestMetrics(c *fiber.Ctx, duration time.Duration) {
+	if httpRequestsTotal == nil || httpRequestDuration == nil {
+		return
+	}
+
 	attrs := metric.WithAttributes(
 		attribute.String("http.method", c.Method()),
 		attribute.String("http.path", c.Route().Path),
@@ -84,8 +100,8 @@ func RecordRequestMetrics(c *fiber.Ctx, duration time.Duration) {
 		attribute.Int("http.status_code", c.Response().StatusCode()),
 	)
 
-	httpRequestsTotal.Add(context.Background(), 1, attrs)
-	httpRequestDuration.Record(context.Background(), duration.Seconds(), attrs)
+	httpRequestsTotal.Add(c.UserContext(), 1, attrs)
+	httpRequestDuration.Record(c.UserContext(), duration.Seconds(), attrs)
 }
 
 func IncActiveRequests(ctx context.Context) {
@@ -119,135 +135,106 @@ func (m MetricsMiddleware) Handle(c *fiber.Ctx) error {
 }
 
 type BusinessMetrics struct {
-	meter metric.Meter
+	listDuration    metric.Float64Histogram
+	listTotal       metric.Int64Counter
+	getDuration     metric.Float64Histogram
+	getTotal        metric.Int64Counter
+	getStatus       metric.Int64Counter
+	createDuration  metric.Float64Histogram
+	createTotal     metric.Int64Counter
+	updateDuration  metric.Float64Histogram
+	updateTotal     metric.Int64Counter
+	updateStatus    metric.Int64Counter
+	deleteDuration  metric.Float64Histogram
+	deleteTotal     metric.Int64Counter
+	deleteStatus    metric.Int64Counter
+	dbQueryDuration metric.Float64Histogram
 }
 
 func NewBusinessMetrics(serviceName string) (*BusinessMetrics, error) {
 	meter := otel.Meter(serviceName + "/business")
+	m := &BusinessMetrics{}
+	errs := make([]error, 0, 14)
+	var err error
 
-	return &BusinessMetrics{meter: meter}, nil
+	m.listDuration, err = newFloat64Histogram(meter, "app.events.list.duration", "List events query duration", "s")
+	errs = append(errs, err)
+	m.listTotal, err = newInt64Counter(meter, "app.events.list.total", "Total list events requests", "{request}")
+	errs = append(errs, err)
+	m.getDuration, err = newFloat64Histogram(meter, "app.events.get.duration", "Get event query duration", "s")
+	errs = append(errs, err)
+	m.getTotal, err = newInt64Counter(meter, "app.events.get.total", "Total get event requests", "{request}")
+	errs = append(errs, err)
+	m.getStatus, err = newInt64Counter(meter, "app.events.get.status", "Get event status", "{status}")
+	errs = append(errs, err)
+	m.createDuration, err = newFloat64Histogram(meter, "app.events.create.duration", "Create event duration", "s")
+	errs = append(errs, err)
+	m.createTotal, err = newInt64Counter(meter, "app.events.create.total", "Total create event requests", "{request}")
+	errs = append(errs, err)
+	m.updateDuration, err = newFloat64Histogram(meter, "app.events.update.duration", "Update event duration", "s")
+	errs = append(errs, err)
+	m.updateTotal, err = newInt64Counter(meter, "app.events.update.total", "Total update event requests", "{request}")
+	errs = append(errs, err)
+	m.updateStatus, err = newInt64Counter(meter, "app.events.update.status", "Update event status", "{status}")
+	errs = append(errs, err)
+	m.deleteDuration, err = newFloat64Histogram(meter, "app.events.delete.duration", "Delete event duration", "s")
+	errs = append(errs, err)
+	m.deleteTotal, err = newInt64Counter(meter, "app.events.delete.total", "Total delete event requests", "{request}")
+	errs = append(errs, err)
+	m.deleteStatus, err = newInt64Counter(meter, "app.events.delete.status", "Delete event status", "{status}")
+	errs = append(errs, err)
+	m.dbQueryDuration, err = newFloat64Histogram(meter, "app.db.query.duration", "Database query duration", "s")
+	errs = append(errs, err)
+
+	if err := firstError(errs...); err != nil {
+		return nil, err
+	}
+
+	return m, nil
 }
 
 func (m *BusinessMetrics) RecordListEvents(ctx context.Context, duration time.Duration, count int) {
-	histogram, _ := m.meter.Float64Histogram(
-		"app.events.list.duration",
-		metric.WithDescription("List events query duration"),
-		metric.WithUnit("s"),
-	)
-	histogram.Record(ctx, duration.Seconds())
-
-	counter, _ := m.meter.Int64Counter(
-		"app.events.list.total",
-		metric.WithDescription("Total list events requests"),
-		metric.WithUnit("{request}"),
-	)
-	counter.Add(ctx, 1)
+	m.listDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.Int("events.count", count)))
+	m.listTotal.Add(ctx, 1)
 }
 
 func (m *BusinessMetrics) RecordGetEvent(ctx context.Context, duration time.Duration, found bool) {
-	histogram, _ := m.meter.Float64Histogram(
-		"app.events.get.duration",
-		metric.WithDescription("Get event query duration"),
-		metric.WithUnit("s"),
-	)
-	histogram.Record(ctx, duration.Seconds())
-
-	counter, _ := m.meter.Int64Counter(
-		"app.events.get.total",
-		metric.WithDescription("Total get event requests"),
-		metric.WithUnit("{request}"),
-	)
-	counter.Add(ctx, 1)
-
-	statusCounter, _ := m.meter.Int64Counter(
-		"app.events.get.status",
-		metric.WithDescription("Get event status"),
-		metric.WithUnit("{status}"),
-	)
+	m.getDuration.Record(ctx, duration.Seconds())
+	m.getTotal.Add(ctx, 1)
 	if found {
-		statusCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "found")))
+		m.getStatus.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "found")))
 	} else {
-		statusCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "not_found")))
+		m.getStatus.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "not_found")))
 	}
 }
 
 func (m *BusinessMetrics) RecordCreateEvent(ctx context.Context, duration time.Duration) {
-	histogram, _ := m.meter.Float64Histogram(
-		"app.events.create.duration",
-		metric.WithDescription("Create event duration"),
-		metric.WithUnit("s"),
-	)
-	histogram.Record(ctx, duration.Seconds())
-
-	counter, _ := m.meter.Int64Counter(
-		"app.events.create.total",
-		metric.WithDescription("Total create event requests"),
-		metric.WithUnit("{request}"),
-	)
-	counter.Add(ctx, 1)
+	m.createDuration.Record(ctx, duration.Seconds())
+	m.createTotal.Add(ctx, 1)
 }
 
 func (m *BusinessMetrics) RecordUpdateEvent(ctx context.Context, duration time.Duration, success bool) {
-	histogram, _ := m.meter.Float64Histogram(
-		"app.events.update.duration",
-		metric.WithDescription("Update event duration"),
-		metric.WithUnit("s"),
-	)
-	histogram.Record(ctx, duration.Seconds())
-
-	counter, _ := m.meter.Int64Counter(
-		"app.events.update.total",
-		metric.WithDescription("Total update event requests"),
-		metric.WithUnit("{request}"),
-	)
-	counter.Add(ctx, 1)
-
-	statusCounter, _ := m.meter.Int64Counter(
-		"app.events.update.status",
-		metric.WithDescription("Update event status"),
-		metric.WithUnit("{status}"),
-	)
+	m.updateDuration.Record(ctx, duration.Seconds())
+	m.updateTotal.Add(ctx, 1)
 	if success {
-		statusCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "success")))
+		m.updateStatus.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "success")))
 	} else {
-		statusCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "failure")))
+		m.updateStatus.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "failure")))
 	}
 }
 
 func (m *BusinessMetrics) RecordDeleteEvent(ctx context.Context, duration time.Duration, success bool) {
-	histogram, _ := m.meter.Float64Histogram(
-		"app.events.delete.duration",
-		metric.WithDescription("Delete event duration"),
-		metric.WithUnit("s"),
-	)
-	histogram.Record(ctx, duration.Seconds())
-
-	counter, _ := m.meter.Int64Counter(
-		"app.events.delete.total",
-		metric.WithDescription("Total delete event requests"),
-		metric.WithUnit("{request}"),
-	)
-	counter.Add(ctx, 1)
-
-	statusCounter, _ := m.meter.Int64Counter(
-		"app.events.delete.status",
-		metric.WithDescription("Delete event status"),
-		metric.WithUnit("{status}"),
-	)
+	m.deleteDuration.Record(ctx, duration.Seconds())
+	m.deleteTotal.Add(ctx, 1)
 	if success {
-		statusCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "success")))
+		m.deleteStatus.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "success")))
 	} else {
-		statusCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "failure")))
+		m.deleteStatus.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "failure")))
 	}
 }
 
 func (m *BusinessMetrics) RecordDatabaseQuery(ctx context.Context, queryType string, duration time.Duration) {
-	histogram, _ := m.meter.Float64Histogram(
-		"app.db.query.duration",
-		metric.WithDescription("Database query duration"),
-		metric.WithUnit("s"),
-	)
-	histogram.Record(ctx, duration.Seconds(), metric.WithAttributes(
+	m.dbQueryDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(
 		attribute.String("query.type", queryType),
 	))
 }
@@ -261,12 +248,13 @@ func StartHTTPServer(port string, reg *prometheus.Registry) error {
 	// Add health endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	return server.ListenAndServe()

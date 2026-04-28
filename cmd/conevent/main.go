@@ -1,14 +1,15 @@
 package main
 
 import (
-	"conevent-backend/config"
-	"conevent-backend/internal/api"
-	"conevent-backend/internal/db"
-	"conevent-backend/internal/observability"
-	"conevent-backend/internal/service"
 	"context"
 	"log"
 	"time"
+
+	"github.com/valms/conevent-backend-unifor/config"
+	"github.com/valms/conevent-backend-unifor/internal/api"
+	"github.com/valms/conevent-backend-unifor/internal/db"
+	"github.com/valms/conevent-backend-unifor/internal/observability"
+	"github.com/valms/conevent-backend-unifor/internal/service"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -81,14 +82,16 @@ func main() {
 	}()
 
 	// Start metrics HTTP server in a goroutine
-	go func() {
-		log.Printf("Starting metrics server on port %s", obsConfig.PrometheusPort)
-		if err := observability.StartHTTPServer(obsConfig.PrometheusPort, reg); err != nil {
-			log.Printf("Error starting metrics server: %v", err)
-		} else {
-			log.Printf("Metrics server stopped")
-		}
-	}()
+	if reg != nil {
+		go func() {
+			log.Printf("Starting metrics server on port %s", obsConfig.PrometheusPort)
+			if err := observability.StartHTTPServer(obsConfig.PrometheusPort, reg); err != nil {
+				log.Printf("Error starting metrics server: %v", err)
+			} else {
+				log.Printf("Metrics server stopped")
+			}
+		}()
+	}
 
 	// Create handler layer
 	eventHandler := api.NewEventHandler(eventService, businessMetrics)
@@ -103,11 +106,11 @@ func main() {
 	// Middleware
 	app.Use(recover.New())
 	app.Use(logger.New())
-	obsConfigMetrics := observability.NewMetricsMiddleware()
-	app.Use(obsConfigMetrics.Handle)
 
 	// Setup observability tracing
 	observability.SetupApp(app, obsConfig.ServiceName)
+	obsConfigMetrics := observability.NewMetricsMiddleware()
+	app.Use(obsConfigMetrics.Handle)
 
 	// Routes - handlers should only parse requests and call services
 	app.Get("/health", api.HealthCheck)
@@ -117,18 +120,7 @@ func main() {
 	app.Put("/events/:id", eventHandler.UpdateEvent)
 	app.Delete("/events/:id", eventHandler.DeleteEvent)
 
-	// Serve OpenAPI documentation
-	app.Get("/openapi.yaml", func(c *fiber.Ctx) error {
-		return c.SendFile("./openapi.yaml")
-	})
-
-	// Serve Swagger UI
-	app.Get("/docs/*", func(c *fiber.Ctx) error {
-		return c.SendFile("./swagger.html")
-	})
-	app.Get("/docs", func(c *fiber.Ctx) error {
-		return c.SendFile("./swagger.html")
-	})
+	api.RegisterDocs(app)
 
 	// Start server
 	address := ":" + cfg.Server.Port

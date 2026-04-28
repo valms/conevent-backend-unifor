@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -10,37 +9,16 @@ import (
 
 func TestLoadConfig(t *testing.T) {
 	// Arrange
-	os.Setenv("SERVER_PORT", "8080")
-	os.Setenv("SERVER_READ_TIMEOUT", "10")
-	os.Setenv("SERVER_WRITE_TIMEOUT", "20")
-	os.Setenv("SERVER_IDLE_TIMEOUT", "120")
-	os.Setenv("DB_HOST", "testhost")
-	os.Setenv("DB_PORT", "5433")
-	os.Setenv("DB_USER", "testuser")
-	os.Setenv("DB_PASSWORD", "testpass")
-	os.Setenv("DB_NAME", "testdb")
-	os.Setenv("DB_SSLMODE", "require")
-
-	defer func() {
-		// Clean up
-		vars := []string{
-			"SERVER_PORT",
-			"SERVER_READ_TIMEOUT",
-			"SERVER_WRITE_TIMEOUT",
-			"SERVER_IDLE_TIMEOUT",
-			"DB_HOST",
-			"DB_PORT",
-			"DB_USER",
-			"DB_PASSWORD",
-			"DB_NAME",
-			"DB_SSLMODE",
-		}
-		for _, v := range vars {
-			if err := os.Unsetenv(v); err != nil {
-				t.Fatalf("failed to unset %s: %v", v, err)
-			}
-		}
-	}()
+	t.Setenv("SERVER_PORT", "8080")
+	t.Setenv("SERVER_READ_TIMEOUT", "10")
+	t.Setenv("SERVER_WRITE_TIMEOUT", "20")
+	t.Setenv("SERVER_IDLE_TIMEOUT", "120")
+	t.Setenv("DB_HOST", "testhost")
+	t.Setenv("DB_PORT", "5433")
+	t.Setenv("DB_USER", "testuser")
+	t.Setenv("DB_PASSWORD", "testpass")
+	t.Setenv("DB_NAME", "testdb")
+	t.Setenv("DB_SSLMODE", "require")
 
 	// Act
 	cfg, err := LoadConfig()
@@ -61,66 +39,11 @@ func TestLoadConfig(t *testing.T) {
 
 func TestLoadConfig_MissingRequired(t *testing.T) {
 	// Arrange
-	originalHost := os.Getenv("DB_HOST")
-	originalPort := os.Getenv("DB_PORT")
-	originalUser := os.Getenv("DB_USER")
-	originalPassword := os.Getenv("DB_PASSWORD")
-	originalName := os.Getenv("DB_NAME")
-
-	os.Unsetenv("DB_HOST")
-	os.Unsetenv("DB_PORT")
-	os.Unsetenv("DB_USER")
-	os.Unsetenv("DB_PASSWORD")
-	os.Unsetenv("DB_NAME")
-
-	defer func() {
-		// Restore original values
-		if originalHost != "" {
-			if err := os.Setenv("DB_HOST", originalHost); err != nil {
-				t.Fatalf("failed to set DB_HOST: %v", err)
-			}
-		} else {
-			if err := os.Unsetenv("DB_HOST"); err != nil {
-				t.Fatalf("failed to unset DB_HOST: %v", err)
-			}
-		}
-		if originalPort != "" {
-			if err := os.Setenv("DB_PORT", originalPort); err != nil {
-				t.Fatalf("failed to set DB_PORT: %v", err)
-			}
-		} else {
-			if err := os.Unsetenv("DB_PORT"); err != nil {
-				t.Fatalf("failed to unset DB_PORT: %v", err)
-			}
-		}
-		if originalUser != "" {
-			if err := os.Setenv("DB_USER", originalUser); err != nil {
-				t.Fatalf("failed to set DB_USER: %v", err)
-			}
-		} else {
-			if err := os.Unsetenv("DB_USER"); err != nil {
-				t.Fatalf("failed to unset DB_USER: %v", err)
-			}
-		}
-		if originalPassword != "" {
-			if err := os.Setenv("DB_PASSWORD", originalPassword); err != nil {
-				t.Fatalf("failed to set DB_PASSWORD: %v", err)
-			}
-		} else {
-			if err := os.Unsetenv("DB_PASSWORD"); err != nil {
-				t.Fatalf("failed to unset DB_PASSWORD: %v", err)
-			}
-		}
-		if originalName != "" {
-			if err := os.Setenv("DB_NAME", originalName); err != nil {
-				t.Fatalf("failed to set DB_NAME: %v", err)
-			}
-		} else {
-			if err := os.Unsetenv("DB_NAME"); err != nil {
-				t.Fatalf("failed to unset DB_NAME: %v", err)
-			}
-		}
-	}()
+	t.Setenv("DB_HOST", "")
+	t.Setenv("DB_PORT", "")
+	t.Setenv("DB_USER", "")
+	t.Setenv("DB_PASSWORD", "")
+	t.Setenv("DB_NAME", "")
 
 	// Act
 	cfg, err := LoadConfig()
@@ -226,6 +149,22 @@ func TestValidate(t *testing.T) {
 			},
 			expectedError: "DB_NAME is required",
 		},
+		{
+			name: "missing trace exporter",
+			cfg: Config{
+				Database:      DatabaseConfig{Host: "localhost", Port: "5432", User: "postgres", Password: "postgres", Name: "conevent", SSLMode: "disable"},
+				Observability: ObservabilityConfig{TraceExporter: ""},
+			},
+			expectedError: "OBS_TRACE_EXPORTER is required",
+		},
+		{
+			name: "missing otlp endpoint",
+			cfg: Config{
+				Database:      DatabaseConfig{Host: "localhost", Port: "5432", User: "postgres", Password: "postgres", Name: "conevent", SSLMode: "disable"},
+				Observability: ObservabilityConfig{TraceExporter: "jaeger", OTLPEndpoint: ""},
+			},
+			expectedError: "OBS_OTLP_ENDPOINT is required",
+		},
 	}
 
 	for _, tt := range tests {
@@ -242,4 +181,20 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDatabaseURL(t *testing.T) {
+	cfg := &Config{Database: DatabaseConfig{Host: "localhost", Port: "5432", User: "user", Password: "pass", Name: "db", SSLMode: "disable"}}
+	assert.Equal(t, "host=localhost port=5432 user=user password=pass dbname=db sslmode=disable", cfg.DatabaseURL())
+}
+
+func TestGetEnvAsIntFallbacks(t *testing.T) {
+	t.Setenv("INT_VALUE", "invalid")
+	assert.Equal(t, 5, getEnvAsInt("INT_VALUE", 5))
+
+	t.Setenv("INT_VALUE", "0")
+	assert.Equal(t, 5, getEnvAsInt("INT_VALUE", 5))
+
+	t.Setenv("INT_VALUE", "7")
+	assert.Equal(t, 7, getEnvAsInt("INT_VALUE", 5))
 }

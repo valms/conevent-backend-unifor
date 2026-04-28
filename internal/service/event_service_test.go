@@ -5,48 +5,26 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
 	"testing"
-
-	"conevent-backend/config"
-	"conevent-backend/internal/db"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/valms/conevent-backend-unifor/config"
+	"github.com/valms/conevent-backend-unifor/internal/db"
 )
 
 // Helper function to create a test database pool using environment variables
 func newTestPool(t *testing.T) *pgxpool.Pool {
-	// Set environment variables for test database
-	// These should be set before calling LoadConfig
-	originalValues := map[string]string{
-		"DB_HOST":     os.Getenv("DB_HOST"),
-		"DB_PORT":     os.Getenv("DB_PORT"),
-		"DB_USER":     os.Getenv("DB_USER"),
-		"DB_PASSWORD": os.Getenv("DB_PASSWORD"),
-		"DB_NAME":     os.Getenv("DB_NAME"),
-		"DB_SSLMODE":  os.Getenv("DB_SSLMODE"),
-	}
-
-	// Set test database values (adjust as needed for your environment)
-	os.Setenv("DB_HOST", "localhost")
-	os.Setenv("DB_PORT", "5433") // Use different port to avoid conflict with main db
-	os.Setenv("DB_USER", "postgres")
-	os.Setenv("DB_PASSWORD", "postgres")
-	os.Setenv("DB_NAME", "conevent_test")
-	os.Setenv("DB_SSLMODE", "disable")
-
-	// Ensure cleanup after test
-	t.Cleanup(func() {
-		for k, v := range originalValues {
-			if v == "" {
-				os.Unsetenv(k)
-			} else {
-				os.Setenv(k, v)
-			}
-		}
-	})
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_PORT", "5433")
+	t.Setenv("DB_USER", "postgres")
+	t.Setenv("DB_PASSWORD", "postgres")
+	t.Setenv("DB_NAME", "conevent_test")
+	t.Setenv("DB_SSLMODE", "disable")
 
 	// Load configuration using environment variables
 	cfg, err := config.LoadConfig()
@@ -54,14 +32,14 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Override database name and port for testing
-	cfg.Database.Name = "conevent_test"
-	cfg.Database.Port = "5433"
-
 	// Create database connection pool
 	dbpool, err := pgxpool.New(context.Background(), cfg.DatabaseURL())
 	if err != nil {
 		t.Fatalf("Unable to connect to database: %v", err)
+	}
+	if err := dbpool.Ping(context.Background()); err != nil {
+		dbpool.Close()
+		t.Skipf("Skipping integration test; test database is unavailable: %v", err)
 	}
 
 	// Run migrations to create tables
@@ -88,7 +66,8 @@ func runMigrations(dbpool *pgxpool.Pool) error {
 	}
 
 	// Read the schema file
-	schemaData, err := os.ReadFile("/home/fjunior/Development/Projects/Educational/Unifor/conevent-backend/internal/db/schema/001_events.sql")
+	schemaPath := filepath.Join("..", "db", "schema", "001_events.sql")
+	schemaData, err := os.ReadFile(schemaPath)
 	if err != nil {
 		return fmt.Errorf("failed to read schema file: %w", err)
 	}
@@ -131,7 +110,7 @@ func TestEventService_CRUD(t *testing.T) {
 			Status:   "Planejamento",
 		}
 
-		err := service.CreateEvent(event)
+		err := service.CreateEvent(context.Background(), event)
 		require.NoError(t, err, "CreateEvent should not return an error")
 		assert.NotEmpty(t, event.ID, "Event ID should be set after creation")
 		assert.NotZero(t, event.CreatedAt, "CreatedAt should be set after creation")
@@ -151,12 +130,12 @@ func TestEventService_CRUD(t *testing.T) {
 			Status:   "Confirmado",
 		}
 
-		err := service.CreateEvent(event)
+		err := service.CreateEvent(context.Background(), event)
 		require.NoError(t, err, "CreateEvent should not return an error")
 		eventID := event.ID
 
 		// Now retrieve it
-		retrievedEvent, err := service.GetEvent(eventID)
+		retrievedEvent, err := service.GetEvent(context.Background(), eventID)
 		require.NoError(t, err, "GetEvent should not return an error")
 		assert.NotNil(t, retrievedEvent, "Retrieved event should not be nil")
 		assert.Equal(t, event.Name, retrievedEvent.Name, "Event names should match")
@@ -187,7 +166,7 @@ func TestEventService_CRUD(t *testing.T) {
 			Budget:   3000.00,
 			Status:   "Concluído",
 		}
-		err := service.CreateEvent(event1)
+		err := service.CreateEvent(context.Background(), event1)
 		require.NoError(t, err, "CreateEvent should not return an error")
 
 		event2 := &Event{
@@ -200,11 +179,11 @@ func TestEventService_CRUD(t *testing.T) {
 			Budget:   4000.25,
 			Status:   "Cancelado",
 		}
-		err = service.CreateEvent(event2)
+		err = service.CreateEvent(context.Background(), event2)
 		require.NoError(t, err, "CreateEvent should not return an error")
 
 		// List all events
-		events, err := service.ListEvents()
+		events, err := service.ListEvents(context.Background())
 		require.NoError(t, err, "ListEvents should not return an error")
 		assert.Len(t, events, 2, "Should have 2 events")
 		assert.Contains(t, events[0].Name, "Test Event", "First event should contain 'Test Event'")
@@ -224,7 +203,7 @@ func TestEventService_CRUD(t *testing.T) {
 			Budget:   5000.00,
 			Status:   "Planejamento",
 		}
-		err := service.CreateEvent(event)
+		err := service.CreateEvent(context.Background(), event)
 		require.NoError(t, err, "CreateEvent should not return an error")
 		eventID := event.ID
 
@@ -241,11 +220,11 @@ func TestEventService_CRUD(t *testing.T) {
 			Status:   "Confirmado",
 		}
 
-		err = service.UpdateEvent(updatedEvent)
+		err = service.UpdateEvent(context.Background(), updatedEvent)
 		require.NoError(t, err, "UpdateEvent should not return an error")
 
 		// Retrieve and verify the update
-		retrievedEvent, err := service.GetEvent(eventID)
+		retrievedEvent, err := service.GetEvent(context.Background(), eventID)
 		require.NoError(t, err, "GetEvent should not return an error")
 		assert.Equal(t, updatedEvent.Name, retrievedEvent.Name, "Event names should match after update")
 		assert.Equal(t, updatedEvent.IniDate, retrievedEvent.IniDate, "Initial dates should match after update")
@@ -270,27 +249,23 @@ func TestEventService_CRUD(t *testing.T) {
 			Budget:   7000.75,
 			Status:   "Cancelado",
 		}
-		err := service.CreateEvent(event)
+		err := service.CreateEvent(context.Background(), event)
 		require.NoError(t, err, "CreateEvent should not return an error")
 		eventID := event.ID
 
 		// Delete the event
-		err = service.DeleteEvent(eventID)
+		err = service.DeleteEvent(context.Background(), eventID)
 		require.NoError(t, err, "DeleteEvent should not return an error")
 
 		// Verify the event is deleted
-		_, err = service.GetEvent(eventID)
+		_, err = service.GetEvent(context.Background(), eventID)
 		assert.Error(t, err, "GetEvent should return an error for deleted event")
 	})
 }
 
 // TestUpdateEvent_Error validates error handling in UpdateEvent
 func TestUpdateEvent_Error(t *testing.T) {
-	dbpool := newTestPool(t)
-	defer dbpool.Close()
-
-	querier := db.New(dbpool)
-	service := NewEventService(querier)
+	service := NewEventService(nil)
 
 	// Test with empty ID
 	event := &Event{
@@ -305,46 +280,42 @@ func TestUpdateEvent_Error(t *testing.T) {
 		Status:   "Planejamento",
 	}
 
-	err := service.UpdateEvent(event)
+	err := service.UpdateEvent(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEventInvalid)
 
 	// Test with invalid UUID format
 	event.ID = "invalid-uuid"
-	err = service.UpdateEvent(event)
+	err = service.UpdateEvent(context.Background(), event)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEventInvalid)
 }
 
 // TestParseUUID_Error tests UUID parsing edge cases
 func TestParseUUID_Error(t *testing.T) {
-	dbpool := newTestPool(t)
-	defer dbpool.Close()
-
-	querier := db.New(dbpool)
-	service := NewEventService(querier)
+	service := &eventService{}
 
 	// Test empty string
-	_, err := service.(*eventService).ParseUUID("")
+	_, err := service.ParseUUID("")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEventInvalid)
 
 	// Test too short
-	_, err = service.(*eventService).ParseUUID("123")
+	_, err = service.ParseUUID("123")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEventInvalid)
 
 	// Test invalid hex
-	_, err = service.(*eventService).ParseUUID("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+	_, err = service.ParseUUID("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEventInvalid)
 
 	// Test valid UUID formats
-	id1, err := service.(*eventService).ParseUUID("550e8400-e29b-41d4-a716-446655440000")
+	id1, err := service.ParseUUID("550e8400-e29b-41d4-a716-446655440000")
 	require.NoError(t, err)
 	assert.True(t, id1.Valid)
 
-	id2, err := service.(*eventService).ParseUUID("550e8400e29b41d4a716446655440000")
+	id2, err := service.ParseUUID("550e8400e29b41d4a716446655440000")
 	require.NoError(t, err)
 	assert.True(t, id2.Valid)
 
@@ -354,67 +325,168 @@ func TestParseUUID_Error(t *testing.T) {
 
 // TestFormatDate tests date formatting
 func TestFormatDate(t *testing.T) {
-	dbpool := newTestPool(t)
-	defer dbpool.Close()
-
-	querier := db.New(dbpool)
-	service := NewEventService(querier)
+	service := &eventService{}
 
 	// Test valid date
-	date, err := service.(*eventService).ParseDate("2026-05-15")
+	date, err := service.ParseDate("2026-05-15")
 	require.NoError(t, err)
 	assert.True(t, date.Valid)
-	assert.Equal(t, "2026-05-15", service.(*eventService).FormatDate(date))
+	assert.Equal(t, "2026-05-15", service.FormatDate(date))
 
 	// Test empty string
-	date, err = service.(*eventService).ParseDate("")
+	date, err = service.ParseDate("")
 	require.NoError(t, err)
 	assert.False(t, date.Valid)
-	assert.Equal(t, "", service.(*eventService).FormatDate(date))
+	assert.Equal(t, "", service.FormatDate(date))
 }
 
 // TestFormatTime tests time formatting
 func TestFormatTime(t *testing.T) {
-	dbpool := newTestPool(t)
-	defer dbpool.Close()
-
-	querier := db.New(dbpool)
-	service := NewEventService(querier)
+	service := &eventService{}
 
 	// Test valid time
-	timeVal, err := service.(*eventService).ParseTime("14:30")
+	timeVal, err := service.ParseTime("14:30")
 	require.NoError(t, err)
 	assert.True(t, timeVal.Valid)
-	assert.Equal(t, "14:30", service.(*eventService).FormatTime(timeVal))
+	assert.Equal(t, "14:30", service.FormatTime(timeVal))
 
 	// Test empty string
-	timeVal, err = service.(*eventService).ParseTime("")
+	timeVal, err = service.ParseTime("")
 	require.NoError(t, err)
 	assert.False(t, timeVal.Valid)
-	assert.Equal(t, "", service.(*eventService).FormatTime(timeVal))
+	assert.Equal(t, "", service.FormatTime(timeVal))
 }
 
 // TestConvertBudget tests budget conversion
 func TestConvertBudget(t *testing.T) {
-	dbpool := newTestPool(t)
-	defer dbpool.Close()
-
-	querier := db.New(dbpool)
-	service := NewEventService(querier)
+	service := &eventService{}
 
 	// Test zero budget
-	assert.Equal(t, 0.0, service.(*eventService).convertBudget(pgtype.Numeric{}))
+	assert.Equal(t, 0.0, service.convertBudget(pgtype.Numeric{}))
 
 	// Test positive budget
 	var budget pgtype.Numeric
 	budget.Int = big.NewInt(12345)
 	budget.Exp = -2
 	budget.Valid = true
-	assert.Equal(t, 123.45, service.(*eventService).convertBudget(budget))
+	assert.Equal(t, 123.45, service.convertBudget(budget))
 
 	// Test negative budget
 	budget.Int = big.NewInt(-9876)
 	budget.Exp = -2
 	budget.Valid = true
-	assert.Equal(t, -98.76, service.(*eventService).convertBudget(budget))
+	assert.Equal(t, -98.76, service.convertBudget(budget))
+
+	budget.Int = nil
+	budget.Valid = true
+	assert.Equal(t, 0.0, service.convertBudget(budget))
+}
+
+func TestEventConversionHelpers(t *testing.T) {
+	service := &eventService{}
+	event := &Event{
+		ID:       "550e8400-e29b-41d4-a716-446655440000",
+		Name:     "Conversion Test",
+		IniDate:  "2026-06-01",
+		EndDate:  "2026-06-02",
+		IniTime:  "08:30",
+		EndTime:  "17:45",
+		Location: "Auditório",
+		Budget:   10.129,
+		Status:   "Planejamento",
+	}
+
+	createParams, err := service.convertToDBEvent(event)
+	require.NoError(t, err)
+	assert.Equal(t, event.Name, createParams.Name)
+	assert.Equal(t, int64(1013), createParams.Budget.Int.Int64())
+	assert.Equal(t, int32(-2), createParams.Budget.Exp)
+
+	id, err := service.ParseUUID(event.ID)
+	require.NoError(t, err)
+	updateParams, err := service.convertToDBEventForUpdate(event, id)
+	require.NoError(t, err)
+	assert.Equal(t, id, updateParams.ID)
+	assert.Equal(t, event.Location, updateParams.Location)
+}
+
+func TestEventConversionErrors(t *testing.T) {
+	service := &eventService{}
+	base := Event{
+		ID:       "550e8400-e29b-41d4-a716-446655440000",
+		Name:     "Conversion Test",
+		IniDate:  "2026-06-01",
+		EndDate:  "2026-06-02",
+		IniTime:  "08:30",
+		EndTime:  "17:45",
+		Location: "Auditório",
+		Budget:   10,
+		Status:   "Planejamento",
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Event)
+	}{
+		{"invalid ini date", func(e *Event) { e.IniDate = "invalid" }},
+		{"invalid end date", func(e *Event) { e.EndDate = "invalid" }},
+		{"invalid ini time", func(e *Event) { e.IniTime = "99:99" }},
+		{"invalid end time", func(e *Event) { e.EndTime = "99:99" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := base
+			tt.mutate(&event)
+			_, err := service.convertToDBEvent(&event)
+			require.Error(t, err)
+
+			id, parseErr := service.ParseUUID(base.ID)
+			require.NoError(t, parseErr)
+			_, err = service.convertToDBEventForUpdate(&event, id)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestValidateEvent(t *testing.T) {
+	service := &eventService{}
+	valid := &Event{Name: "Name", IniDate: "2026-01-01", EndDate: "2026-01-02", IniTime: "09:00", EndTime: "10:00", Location: "Room", Status: "Confirmado"}
+	assert.NoError(t, service.validateEvent(valid))
+
+	invalid := *valid
+	invalid.Name = ""
+	assert.ErrorIs(t, service.validateEvent(&invalid), ErrEventInvalid)
+}
+
+func TestFormatTimestampAndCopyCreatedEvent(t *testing.T) {
+	service := &eventService{}
+	assert.Equal(t, "", service.formatTimeStamp(pgtype.Timestamptz{}))
+
+	createdAt := pgtype.Timestamptz{Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Valid: true}
+	assert.Equal(t, "2026-01-02T03:04:05Z", service.formatTimeStamp(createdAt))
+
+	iniDate, _ := service.ParseDate("2026-01-01")
+	endDate, _ := service.ParseDate("2026-01-02")
+	iniTime, _ := service.ParseTime("09:00")
+	endTime, _ := service.ParseTime("10:30")
+	budget, _ := service.convertBudgetToNumeric(123.45)
+	event := &Event{}
+	service.copyCreatedEvent(event, db.Event{
+		IniDate:   iniDate,
+		EndDate:   endDate,
+		IniTime:   iniTime,
+		EndTime:   endTime,
+		Location:  "Room",
+		Budget:    budget,
+		Status:    "Confirmado",
+		CreatedAt: createdAt,
+	})
+
+	assert.Equal(t, "2026-01-01", event.IniDate)
+	assert.Equal(t, "10:30", event.EndTime)
+	assert.Equal(t, "Room", event.Location)
+	assert.Equal(t, 123.45, event.Budget)
+	assert.Equal(t, "Confirmado", event.Status)
+	assert.Equal(t, "2026-01-02T03:04:05Z", event.CreatedAt)
 }

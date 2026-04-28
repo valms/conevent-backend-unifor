@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: conevent-config
+  labels:
+    app: conevent
+data:
+  DB_HOST: "conevent-postgres"
+  DB_PORT: "5432"
+  DB_NAME: "conevent"
+  DB_SSLMODE: "disable"
+  SERVER_PORT: "3000"
+  SERVER_READ_TIMEOUT: "5"
+  SERVER_WRITE_TIMEOUT: "10"
+  SERVER_IDLE_TIMEOUT: "120"
+  OBS_SERVICE_NAME: "conevent-backend"
+  OBS_SERVICE_VERSION: "1.0.0"
+  OBS_TRACE_EXPORTER: "jaeger"
+  OBS_OTLP_ENDPOINT: "jaeger:4317"
+  OBS_PROMETHEUS_PORT: "9090"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conevent
+  labels:
+    app: conevent
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      nodePort: 30000
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      nodePort: 30090
+  selector:
+    app: conevent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conevent
+  labels:
+    app: conevent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conevent
+  template:
+    metadata:
+      labels:
+        app: conevent
+    spec:
+      containers:
+        - name: conevent
+          image: valmarjunior/conevent:v2.5
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+          envFrom:
+            - configMapRef:
+                name: conevent-config
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      initContainers:
+        - name: init-db
+          image: postgres:15-alpine
+          command: [ "sh", "-c", "until pg_isready -h \"$DB_HOST\" -p \"$DB_PORT\"; do echo \"Waiting for postgres\"; sleep 2; done;" ]
+          env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_NAME
+          envFrom:
+            - configMapRef:
+                name: conevent-config
+        - name: apply-migrations
+          image: postgres:15-alpine
+          command: [ "sh", "-c", "psql -h \"$DB_HOST\" -p \"$DB_PORT\" -U \"$PGUSER\" -d \"$PGDATABASE\" -f /docker-entrypoint-initdb.d/001-events.sql" ]
+          env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: conevent-config
+                  key: DB_NAME
+          envFrom:
+            - configMapRef:
+                name: conevent-config
+          volumeMounts:
+            - name: initdb-scripts
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: initdb-scripts
+          configMap:
+            name: conevent-initdb
+            items:
+              - key: 001-events.sql
+                path: 001-events.sql

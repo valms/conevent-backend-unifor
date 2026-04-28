@@ -38,27 +38,18 @@ func InitTracing(ctx context.Context, cfg Config) (*sdktrace.TracerProvider, err
 			otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
 			otlptracegrpc.WithInsecure(),
 		)
-		if err != nil {
-			return nil, err
-		}
 	case "otlphttp":
 		exporter, err = otlptracehttp.New(ctx,
 			otlptracehttp.WithEndpoint(cfg.OTLPEndpoint),
 			otlptracehttp.WithInsecure(),
 		)
-		if err != nil {
-			return nil, err
-		}
 	case "stdout":
 		exporter, err = stdouttrace.New(stdouttrace.WithPrettyPrint())
-		if err != nil {
-			return nil, err
-		}
 	default:
 		exporter, err = stdouttrace.New(stdouttrace.WithPrettyPrint())
-		if err != nil {
-			return nil, err
-		}
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	res, err := sdkresource.New(ctx,
@@ -124,13 +115,23 @@ func InitMetrics(ctx context.Context, cfg Config) (*sdkmetric.MeterProvider, *pr
 func SetupApp(app *fiber.App, serviceName string) {
 	app.Use(otelfiber.Middleware(
 		otelfiber.WithTracerProvider(otel.GetTracerProvider()),
+		otelfiber.WithPropagators(otel.GetTextMapPropagator()),
+		otelfiber.WithNext(ShouldSkipTrace),
+		otelfiber.WithSpanNameFormatter(func(c *fiber.Ctx) string {
+			return c.Method() + " " + c.Route().Path
+		}),
 		otelfiber.WithCustomAttributes(func(c *fiber.Ctx) []attribute.KeyValue {
 			return []attribute.KeyValue{
 				attribute.String("http.method", c.Method()),
 				attribute.String("http.url", c.Path()),
 				attribute.String("http.route", c.Route().Path),
 				attribute.Int("http.status_code", c.Response().StatusCode()),
+				attribute.String("app.component", "http"),
 			}
 		}),
 	))
+}
+
+func ShouldSkipTrace(c *fiber.Ctx) bool {
+	return c.Path() == "/health"
 }

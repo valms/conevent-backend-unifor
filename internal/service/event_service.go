@@ -6,26 +6,30 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/big"
 	"time"
 
-	"conevent-backend/internal/db"
-
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/valms/conevent-backend-unifor/internal/db"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // EventService defines the interface for event-related operations
 type EventService interface {
 	// GetEvent returns an event by ID
-	GetEvent(eventID string) (*Event, error)
+	GetEvent(ctx context.Context, eventID string) (*Event, error)
 	// ListEvents returns a list of events
-	ListEvents() ([]*Event, error)
+	ListEvents(ctx context.Context) ([]*Event, error)
 	// CreateEvent creates a new event
-	CreateEvent(event *Event) error
+	CreateEvent(ctx context.Context, event *Event) error
 	// UpdateEvent updates an existing event
-	UpdateEvent(event *Event) error
+	UpdateEvent(ctx context.Context, event *Event) error
 	// DeleteEvent deletes an event by ID
-	DeleteEvent(eventID string) error
+	DeleteEvent(ctx context.Context, eventID string) error
 }
 
 // Event represents an event in the system
@@ -51,6 +55,7 @@ var (
 type eventService struct {
 	querier *db.Queries
 	logger  *slog.Logger
+	tracer  trace.Tracer
 }
 
 // NewEventService creates a new EventService instance
@@ -58,36 +63,55 @@ func NewEventService(querier *db.Queries) EventService {
 	return &eventService{
 		querier: querier,
 		logger:  slog.Default(),
+		tracer:  otel.Tracer("github.com/valms/conevent-backend-unifor/internal/service"),
 	}
 }
 
+func recordSpanError(span trace.Span, err error) {
+	if err == nil {
+		return
+	}
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+}
+
 // GetEvent returns an event by ID
-func (s *eventService) GetEvent(eventID string) (*Event, error) {
+func (s *eventService) GetEvent(ctx context.Context, eventID string) (*Event, error) {
+	ctx, span := s.tracer.Start(ctx, "EventService.GetEvent", trace.WithAttributes(attribute.String("event.id", eventID)))
+	defer span.End()
+
 	s.logger.Info("getting event", "event_id", eventID)
 
 	id, err := s.ParseUUID(eventID)
 	if err != nil {
 		s.logger.Error("failed to parse event ID", "error", err)
+		recordSpanError(span, err)
 		return nil, err
 	}
 
-	event, err := s.querier.GetEvent(context.Background(), id)
+	event, err := s.querier.GetEvent(ctx, id)
 	if err != nil {
 		s.logger.Error("failed to get event", "error", err)
+		recordSpanError(span, err)
 		return nil, err
 	}
 
 	s.logger.Info("event retrieved successfully", "event_id", event.ID.String())
+	span.SetStatus(codes.Ok, "event retrieved")
 	return s.convertDBEvent(event), nil
 }
 
 // ListEvents returns a list of events
-func (s *eventService) ListEvents() ([]*Event, error) {
+func (s *eventService) ListEvents(ctx context.Context) ([]*Event, error) {
+	ctx, span := s.tracer.Start(ctx, "EventService.ListEvents")
+	defer span.End()
+
 	s.logger.Info("listing events")
 
-	events, err := s.querier.ListEvents(context.Background())
+	events, err := s.querier.ListEvents(ctx)
 	if err != nil {
 		s.logger.Error("failed to list events", "error", err)
+		recordSpanError(span, err)
 		return nil, err
 	}
 
@@ -97,31 +121,41 @@ func (s *eventService) ListEvents() ([]*Event, error) {
 	}
 
 	s.logger.Info("events listed successfully", "count", len(events))
+	span.SetAttributes(attribute.Int("events.count", len(events)))
+	span.SetStatus(codes.Ok, "events listed")
 	return result, nil
 }
 
 // CreateEvent creates a new event
-func (s *eventService) CreateEvent(event *Event) error {
+func (s *eventService) CreateEvent(ctx context.Context, event *Event) error {
+	ctx, span := s.tracer.Start(ctx, "EventService.CreateEvent", trace.WithAttributes(attribute.String("event.name", event.Name)))
+	defer span.End()
+
 	s.logger.Info("creating event", "name", event.Name)
 
 	if err := s.validateEvent(event); err != nil {
 		s.logger.Error("event validation failed", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 
 	dbEvent, err := s.convertToDBEvent(event)
 	if err != nil {
 		s.logger.Error("failed to convert event", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 
-	createdEvent, err := s.querier.CreateEvent(context.Background(), dbEvent)
+	createdEvent, err := s.querier.CreateEvent(ctx, dbEvent)
 	if err != nil {
 		s.logger.Error("failed to create event", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 
 	s.logger.Info("event created successfully", "event_id", createdEvent.ID.String())
+	span.SetAttributes(attribute.String("event.id", createdEvent.ID.String()))
+	span.SetStatus(codes.Ok, "event created")
 
 	// Update the event with the created values
 	event.ID = createdEvent.ID.String()
@@ -131,58 +165,78 @@ func (s *eventService) CreateEvent(event *Event) error {
 }
 
 // UpdateEvent updates an existing event
-func (s *eventService) UpdateEvent(event *Event) error {
+func (s *eventService) UpdateEvent(ctx context.Context, event *Event) error {
+	ctx, span := s.tracer.Start(ctx, "EventService.UpdateEvent", trace.WithAttributes(attribute.String("event.id", event.ID)))
+	defer span.End()
+
 	s.logger.Info("updating event", "event_id", event.ID)
 
 	if event.ID == "" {
 		s.logger.Error("event ID is required")
+		recordSpanError(span, ErrEventInvalid)
 		return ErrEventInvalid
+	}
+	if err := s.validateEvent(event); err != nil {
+		s.logger.Error("event validation failed", "error", err)
+		recordSpanError(span, err)
+		return err
 	}
 
 	id, err := s.ParseUUID(event.ID)
 	if err != nil {
 		s.logger.Error("failed to parse event ID", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 
 	dbEvent, err := s.convertToDBEventForUpdate(event, id)
 	if err != nil {
 		s.logger.Error("failed to convert event", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 	dbEvent.ID = id
 
-	_, err = s.querier.UpdateEvent(context.Background(), *dbEvent)
+	_, err = s.querier.UpdateEvent(ctx, *dbEvent)
 	if err != nil {
 		s.logger.Error("failed to update event", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 
 	s.logger.Info("event updated successfully", "event_id", event.ID)
+	span.SetStatus(codes.Ok, "event updated")
 	return nil
 }
 
 // DeleteEvent deletes an event by ID
-func (s *eventService) DeleteEvent(eventID string) error {
+func (s *eventService) DeleteEvent(ctx context.Context, eventID string) error {
+	ctx, span := s.tracer.Start(ctx, "EventService.DeleteEvent", trace.WithAttributes(attribute.String("event.id", eventID)))
+	defer span.End()
+
 	s.logger.Info("deleting event", "event_id", eventID)
 
 	if eventID == "" {
 		s.logger.Error("event ID is required")
+		recordSpanError(span, ErrEventInvalid)
 		return ErrEventInvalid
 	}
 
 	id, err := s.ParseUUID(eventID)
 	if err != nil {
 		s.logger.Error("failed to parse event ID", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 
-	if err := s.querier.DeleteEvent(context.Background(), id); err != nil {
+	if err := s.querier.DeleteEvent(ctx, id); err != nil {
 		s.logger.Error("failed to delete event", "error", err)
+		recordSpanError(span, err)
 		return err
 	}
 
 	s.logger.Info("event deleted successfully", "event_id", eventID)
+	span.SetStatus(codes.Ok, "event deleted")
 	return nil
 }
 
@@ -191,10 +245,8 @@ func (s *eventService) DeleteEvent(eventID string) error {
 func (s *eventService) ParseUUID(id string) (pgtype.UUID, error) {
 	var idBytes [16]byte
 
-	// Extract only hex digits (last 32 chars)
 	idToParse := id
 	if len(id) == 36 {
-		// Remove hyphens: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 		idToParse = id[0:8] + id[9:13] + id[14:18] + id[19:23] + id[24:]
 	}
 
@@ -263,7 +315,7 @@ func (s *eventService) validateEvent(event *Event) error {
 
 // Helper: convert budget float64 to pgtype.Numeric (assuming 2 decimal places)
 func (s *eventService) convertBudgetToNumeric(budget float64) (pgtype.Numeric, error) {
-	budgetInt := new(big.Int).Mul(big.NewInt(int64(budget*100)), big.NewInt(1))
+	budgetInt := big.NewInt(int64(math.Round(budget * 100)))
 	return pgtype.Numeric{Int: budgetInt, Exp: -2, Valid: true}, nil
 }
 
@@ -375,7 +427,7 @@ func (s *eventService) formatTimeStamp(ts pgtype.Timestamptz) string {
 	return ts.Time.Format("2006-01-02T15:04:05Z07:00")
 }
 
-// Helper: copy created event values to original event
+// Helper: copy created event values to the original event
 func (s *eventService) copyCreatedEvent(event *Event, createdEvent db.Event) {
 	event.IniDate = s.FormatDate(createdEvent.IniDate)
 	event.EndDate = s.FormatDate(createdEvent.EndDate)

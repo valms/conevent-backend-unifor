@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: conevent-secret
+  labels:
+    app: conevent
+type: Opaque
+data:
+  DB_USER: cG9zdGdyZXM=
+  DB_PASSWORD: cG9zdGdyZXM=
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  labels:
+    app: conevent-postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: conevent-initdb
+  labels:
+    app: conevent
+data:
+  001-events.sql: |
+    -- Create events table
+    CREATE TABLE events
+    (
+        id         UUID PRIMARY KEY         DEFAULT gen_random_uuid(),
+        name       VARCHAR(255)   NOT NULL,
+        ini_date   DATE           NOT NULL,
+        end_date   DATE           NOT NULL,
+        ini_time   TIME           NOT NULL,
+        end_time   TIME           NOT NULL,
+        location   VARCHAR(255)   NOT NULL,
+        budget     DECIMAL(10, 2) NOT NULL,
+        status     VARCHAR(50)    NOT NULL CHECK (status IN ('Planejamento', 'Confirmado', 'Concluído', 'Cancelado')),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Create suppliers table
+    CREATE TABLE suppliers
+    (
+        id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        company VARCHAR(255)   NOT NULL,
+        price   DECIMAL(10, 2) NOT NULL,
+        contact VARCHAR(255)   NOT NULL,
+        status  VARCHAR(50)    NOT NULL CHECK (status IN
+                                               ('Buscando contato', 'Em negociação', 'Contrato Fechado', 'Descartado')),
+        winner  BOOLEAN          DEFAULT FALSE
+    );
+
+    -- Create budget_items table
+    CREATE TABLE budget_items
+    (
+        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id     UUID         NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+        name         VARCHAR(255) NOT NULL,
+        has_a_winner BOOLEAN          DEFAULT FALSE
+    );
+
+    -- Create guests table
+    CREATE TABLE guests
+    (
+        id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id UUID         NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+        name     VARCHAR(255) NOT NULL,
+        email    VARCHAR(255),
+        phone    VARCHAR(50),
+        status   VARCHAR(50)  NOT NULL CHECK (status IN ('Pendente', 'Confirmado', 'Recusado'))
+    );
+
+    -- Indexes for performance
+    CREATE INDEX idx_budget_items_event_id ON budget_items (event_id);
+    CREATE INDEX idx_guests_event_id ON guests (event_id);
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conevent-postgres
+  labels:
+    app: conevent-postgres
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+  selector:
+    app: conevent-postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conevent-postgres
+  labels:
+    app: conevent-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conevent-postgres
+  template:
+    metadata:
+      labels:
+        app: conevent-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+            - name: POSTGRES_DB
+              value: "conevent"
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: postgres
+        - name: postgres-exporter
+          image: prometheuscommunity/postgres-exporter
+          ports:
+            - name: metrics
+              containerPort: 9187
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://$(PGUSER):$(PGPASSWORD)@localhost:5432/conevent?sslmode=disable"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: conevent-secret
+                  key: DB_PASSWORD
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc

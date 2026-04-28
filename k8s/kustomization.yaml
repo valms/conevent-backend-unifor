@@ -1,19 +1,4 @@
 resources:
-  - configmap.yaml
-  - secret.yaml
-  - postgres-pvc.yaml
-  - postgres-service.yaml
-  - postgres-deployment.yaml
-  - initdb-configmap.yaml
-  - conevent-service.yaml
-  - conevent-deployment.yaml
-  - prometheus-config.yaml
-  - prometheus-deployment.yaml
-  - prometheus-service.yaml
-  - grafana-datasource.yaml
-  - grafana-deployment.yaml
-  - grafana-service.yaml
-  - loki-deployment.yaml
-  - promtail-config.yaml
-  - promtail-daemonset.yaml
-  - grafana-dashboard-provider.yaml
+  - database.yaml
+  - app.yaml
+  - observability.yaml

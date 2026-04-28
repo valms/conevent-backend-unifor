@@ -6,7 +6,11 @@
 
 # Coverage output files
 coverage.out
+coverage.filtered.out
+*.out
+
+# Local build artifacts
+conevent
 
 # Dependency directories
 vendor/
-```
