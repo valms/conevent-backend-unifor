@@ -147,6 +147,12 @@ func TestValidate(t *testing.T) {
 					Name:     "conevent",
 					SSLMode:  "disable",
 				},
+				Observability: ObservabilityConfig{
+					ServiceName:    "conevent-backend",
+					ServiceVersion: "1.0.0",
+					TraceExporter:  "stdout",
+					OTLPEndpoint:   "",
+				},
 			},
 			expectedError: "",
 		},

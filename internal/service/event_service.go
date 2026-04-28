@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -49,182 +50,248 @@ var (
 // eventService implements EventService using database operations
 type eventService struct {
 	querier *db.Queries
+	logger  *slog.Logger
 }
 
 // NewEventService creates a new EventService instance
 func NewEventService(querier *db.Queries) EventService {
-	return &eventService{querier: querier}
+	return &eventService{
+		querier: querier,
+		logger:  slog.Default(),
+	}
 }
 
 // GetEvent returns an event by ID
 func (s *eventService) GetEvent(eventID string) (*Event, error) {
-	// Parse UUID
-	var idBytes [16]byte
-	if len(eventID) == 36 {
-		// Standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-		if len(eventID) != 36 {
-			return nil, ErrEventInvalid
-		}
-		// Remove hyphens
-		hexStr := eventID[0:8] + eventID[9:13] + eventID[14:18] + eventID[19:23] + eventID[24:]
-		if len(hexStr) != 32 {
-			return nil, ErrEventInvalid
-		}
-		// Decode hex
-		if _, err := hex.Decode(idBytes[:], []byte(hexStr)); err != nil {
-			return nil, ErrEventInvalid
-		}
-	} else if len(eventID) == 32 {
-		// Compact UUID format
-		if _, err := hex.Decode(idBytes[:], []byte(eventID)); err != nil {
-			return nil, ErrEventInvalid
-		}
-	} else {
-		return nil, ErrEventInvalid
-	}
-	id := pgtype.UUID{Bytes: idBytes, Valid: true}
+	s.logger.Info("getting event", "event_id", eventID)
 
-	event, err := s.querier.GetEvent(context.Background(), id)
+	id, err := s.ParseUUID(eventID)
 	if err != nil {
+		s.logger.Error("failed to parse event ID", "error", err)
 		return nil, err
 	}
 
-	// Convert pgtype values to our API format
-	var iniDateStr, endDateStr, iniTimeStr, endTimeStr string
-	if event.IniDate.Valid {
-		iniDateStr = event.IniDate.Time.Format("2006-01-02")
-	}
-	if event.EndDate.Valid {
-		endDateStr = event.EndDate.Time.Format("2006-01-02")
-	}
-	if event.IniTime.Valid {
-		// Convert microseconds to HH:MM format
-		hours := event.IniTime.Microseconds / 3600000000
-		minutes := (event.IniTime.Microseconds % 3600000000) / 60000000
-		iniTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
-	}
-	if event.EndTime.Valid {
-		// Convert microseconds to HH:MM format
-		hours := event.EndTime.Microseconds / 3600000000
-		minutes := (event.EndTime.Microseconds % 3600000000) / 60000000
-		endTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
-	}
-	var budgetFloat64 float64
-	if event.Budget.Valid {
-		f8, err := event.Budget.Float64Value()
-		if err != nil {
-			return nil, err
-		}
-		budgetFloat64 = f8.Float64
-	}
-	var createdAtStr string
-	if event.CreatedAt.Valid {
-		createdAtStr = event.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+	event, err := s.querier.GetEvent(context.Background(), id)
+	if err != nil {
+		s.logger.Error("failed to get event", "error", err)
+		return nil, err
 	}
 
-	return &Event{
-		ID:        event.ID.String(),
-		Name:      event.Name,
-		IniDate:   iniDateStr,
-		EndDate:   endDateStr,
-		IniTime:   iniTimeStr,
-		EndTime:   endTimeStr,
-		Location:  event.Location,
-		Budget:    budgetFloat64,
-		Status:    event.Status,
-		CreatedAt: createdAtStr,
-	}, nil
+	s.logger.Info("event retrieved successfully", "event_id", event.ID.String())
+	return s.convertDBEvent(event), nil
 }
 
 // ListEvents returns a list of events
 func (s *eventService) ListEvents() ([]*Event, error) {
+	s.logger.Info("listing events")
+
 	events, err := s.querier.ListEvents(context.Background())
 	if err != nil {
+		s.logger.Error("failed to list events", "error", err)
 		return nil, err
 	}
 
 	result := make([]*Event, 0, len(events))
 	for _, event := range events {
-		// Convert microseconds to HH:MM format for times
-		var iniTimeStr, endTimeStr string
-		if event.IniTime.Valid {
-			hours := event.IniTime.Microseconds / 3600000000
-			minutes := (event.IniTime.Microseconds % 3600000000) / 60000000
-			iniTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
-		}
-		if event.EndTime.Valid {
-			hours := event.EndTime.Microseconds / 3600000000
-			minutes := (event.EndTime.Microseconds % 3600000000) / 60000000
-			endTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
-		}
-
-		// Convert Numeric to float64
-		var budgetFloat64 float64
-		if event.Budget.Valid {
-			f8, err := event.Budget.Float64Value()
-			if err != nil {
-				return nil, err
-			}
-			budgetFloat64 = f8.Float64
-		}
-
-		result = append(result, &Event{
-			ID:        event.ID.String(),
-			Name:      event.Name,
-			IniDate:   event.IniDate.Time.Format("2006-01-02"),
-			EndDate:   event.EndDate.Time.Format("2006-01-02"),
-			IniTime:   iniTimeStr,
-			EndTime:   endTimeStr,
-			Location:  event.Location,
-			Budget:    budgetFloat64,
-			Status:    event.Status,
-			CreatedAt: event.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
-		})
+		result = append(result, s.convertDBEvent(event))
 	}
 
+	s.logger.Info("events listed successfully", "count", len(events))
 	return result, nil
 }
 
 // CreateEvent creates a new event
 func (s *eventService) CreateEvent(event *Event) error {
-	// Validate required fields
+	s.logger.Info("creating event", "name", event.Name)
+
+	if err := s.validateEvent(event); err != nil {
+		s.logger.Error("event validation failed", "error", err)
+		return err
+	}
+
+	dbEvent, err := s.convertToDBEvent(event)
+	if err != nil {
+		s.logger.Error("failed to convert event", "error", err)
+		return err
+	}
+
+	createdEvent, err := s.querier.CreateEvent(context.Background(), dbEvent)
+	if err != nil {
+		s.logger.Error("failed to create event", "error", err)
+		return err
+	}
+
+	s.logger.Info("event created successfully", "event_id", createdEvent.ID.String())
+
+	// Update the event with the created values
+	event.ID = createdEvent.ID.String()
+	s.copyCreatedEvent(event, createdEvent)
+
+	return nil
+}
+
+// UpdateEvent updates an existing event
+func (s *eventService) UpdateEvent(event *Event) error {
+	s.logger.Info("updating event", "event_id", event.ID)
+
+	if event.ID == "" {
+		s.logger.Error("event ID is required")
+		return ErrEventInvalid
+	}
+
+	id, err := s.ParseUUID(event.ID)
+	if err != nil {
+		s.logger.Error("failed to parse event ID", "error", err)
+		return err
+	}
+
+	dbEvent, err := s.convertToDBEventForUpdate(event, id)
+	if err != nil {
+		s.logger.Error("failed to convert event", "error", err)
+		return err
+	}
+	dbEvent.ID = id
+
+	_, err = s.querier.UpdateEvent(context.Background(), *dbEvent)
+	if err != nil {
+		s.logger.Error("failed to update event", "error", err)
+		return err
+	}
+
+	s.logger.Info("event updated successfully", "event_id", event.ID)
+	return nil
+}
+
+// DeleteEvent deletes an event by ID
+func (s *eventService) DeleteEvent(eventID string) error {
+	s.logger.Info("deleting event", "event_id", eventID)
+
+	if eventID == "" {
+		s.logger.Error("event ID is required")
+		return ErrEventInvalid
+	}
+
+	id, err := s.ParseUUID(eventID)
+	if err != nil {
+		s.logger.Error("failed to parse event ID", "error", err)
+		return err
+	}
+
+	if err := s.querier.DeleteEvent(context.Background(), id); err != nil {
+		s.logger.Error("failed to delete event", "error", err)
+		return err
+	}
+
+	s.logger.Info("event deleted successfully", "event_id", eventID)
+	return nil
+}
+
+// ParseUUID parses a UUID string (with or without hyphens) to pgtype.UUID
+// Takes last 32 characters removing any hyphens
+func (s *eventService) ParseUUID(id string) (pgtype.UUID, error) {
+	var idBytes [16]byte
+
+	// Extract only hex digits (last 32 chars)
+	idToParse := id
+	if len(id) == 36 {
+		// Remove hyphens: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+		idToParse = id[0:8] + id[9:13] + id[14:18] + id[19:23] + id[24:]
+	}
+
+	if len(idToParse) != 32 {
+		return pgtype.UUID{}, ErrEventInvalid
+	}
+
+	if _, err := hex.Decode(idBytes[:], []byte(idToParse)); err != nil {
+		return pgtype.UUID{}, ErrEventInvalid
+	}
+
+	return pgtype.UUID{Bytes: idBytes, Valid: true}, nil
+}
+
+// FormatDate formats pgtype.Date to string (YYYY-MM-DD)
+func (s *eventService) FormatDate(date pgtype.Date) string {
+	if !date.Valid {
+		return ""
+	}
+	return date.Time.Format("2006-01-02")
+}
+
+// FormatTime formats pgtype.Time to string (HH:MM)
+func (s *eventService) FormatTime(t pgtype.Time) string {
+	if !t.Valid {
+		return ""
+	}
+	hours := t.Microseconds / 3600000000
+	minutes := (t.Microseconds % 3600000000) / 60000000
+	return fmt.Sprintf("%02d:%02d", hours, minutes)
+}
+
+// ParseDate parses date string (YYYY-MM-DD) to pgtype.Date
+func (s *eventService) ParseDate(dateStr string) (pgtype.Date, error) {
+	if dateStr == "" {
+		return pgtype.Date{}, nil
+	}
+	t, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return pgtype.Date{}, err
+	}
+	return pgtype.Date{Time: t, Valid: true}, nil
+}
+
+// ParseTime parses time string (HH:MM) to pgtype.Time
+func (s *eventService) ParseTime(timeStr string) (pgtype.Time, error) {
+	if timeStr == "" {
+		return pgtype.Time{}, nil
+	}
+	t, err := time.Parse("15:04", timeStr)
+	if err != nil {
+		return pgtype.Time{}, err
+	}
+	return pgtype.Time{Microseconds: int64(t.Hour()*3600+t.Minute()*60) * 1000000, Valid: true}, nil
+}
+
+// Helper: validate event required fields
+func (s *eventService) validateEvent(event *Event) error {
 	if event.Name == "" || event.IniDate == "" || event.EndDate == "" ||
 		event.IniTime == "" || event.EndTime == "" || event.Location == "" ||
 		event.Status == "" {
 		return ErrEventInvalid
 	}
+	return nil
+}
 
-	// Parse date values
-	iniDateTime, err := time.Parse("2006-01-02", event.IniDate)
+// Helper: convert budget float64 to pgtype.Numeric (assuming 2 decimal places)
+func (s *eventService) convertBudgetToNumeric(budget float64) (pgtype.Numeric, error) {
+	budgetInt := new(big.Int).Mul(big.NewInt(int64(budget*100)), big.NewInt(1))
+	return pgtype.Numeric{Int: budgetInt, Exp: -2, Valid: true}, nil
+}
+
+// Helper: convert service Event to db CreateEventParams
+func (s *eventService) convertToDBEvent(event *Event) (db.CreateEventParams, error) {
+	iniDate, err := s.ParseDate(event.IniDate)
 	if err != nil {
-		return err
+		return db.CreateEventParams{}, err
 	}
-	endDateTime, err := time.Parse("2006-01-02", event.EndDate)
+	endDate, err := s.ParseDate(event.EndDate)
 	if err != nil {
-		return err
+		return db.CreateEventParams{}, err
 	}
-
-	// Parse time values
-	iniTimeParsed, err := time.Parse("15:04", event.IniTime)
+	iniTime, err := s.ParseTime(event.IniTime)
 	if err != nil {
-		return err
+		return db.CreateEventParams{}, err
 	}
-	endTimeParsed, err := time.Parse("15:04", event.EndTime)
+	endTime, err := s.ParseTime(event.EndTime)
 	if err != nil {
-		return err
+		return db.CreateEventParams{}, err
 	}
 
-	// Convert to pgtype values
-	iniDate := pgtype.Date{Time: iniDateTime, Valid: true}
-	endDate := pgtype.Date{Time: endDateTime, Valid: true}
-	iniTime := pgtype.Time{Microseconds: int64(iniTimeParsed.Hour()*3600+iniTimeParsed.Minute()*60) * 1000000, Valid: true}
-	endTime := pgtype.Time{Microseconds: int64(endTimeParsed.Hour()*3600+endTimeParsed.Minute()*60) * 1000000, Valid: true}
+	budget, err := s.convertBudgetToNumeric(event.Budget)
+	if err != nil {
+		return db.CreateEventParams{}, err
+	}
 
-	// Convert budget to pgtype.Numeric (assuming 2 decimal places)
-	budgetInt := new(big.Int).Mul(big.NewInt(int64(event.Budget*100)), big.NewInt(1))
-	budget := pgtype.Numeric{Int: budgetInt, Exp: -2, Valid: true}
-
-	dbEvent := db.CreateEventParams{
+	return db.CreateEventParams{
 		Name:     event.Name,
 		IniDate:  iniDate,
 		EndDate:  endDate,
@@ -233,123 +300,34 @@ func (s *eventService) CreateEvent(event *Event) error {
 		Location: event.Location,
 		Budget:   budget,
 		Status:   event.Status,
-	}
-
-	createdEvent, err := s.querier.CreateEvent(context.Background(), dbEvent)
-	if err != nil {
-		return err
-	}
-
-	// Convert pgtype values to our API format
-	var iniDateStr, endDateStr, iniTimeStr, endTimeStr string
-	if createdEvent.IniDate.Valid {
-		iniDateStr = createdEvent.IniDate.Time.Format("2006-01-02")
-	}
-	if createdEvent.EndDate.Valid {
-		endDateStr = createdEvent.EndDate.Time.Format("2006-01-02")
-	}
-	if createdEvent.IniTime.Valid {
-		// Convert microseconds to HH:MM format
-		hours := createdEvent.IniTime.Microseconds / 3600000000
-		minutes := (createdEvent.IniTime.Microseconds % 3600000000) / 60000000
-		iniTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
-	}
-	if createdEvent.EndTime.Valid {
-		// Convert microseconds to HH:MM format
-		hours := createdEvent.EndTime.Microseconds / 3600000000
-		minutes := (createdEvent.EndTime.Microseconds % 3600000000) / 60000000
-		endTimeStr = fmt.Sprintf("%02d:%02d", hours, minutes)
-	}
-	var budgetFloat64 float64
-	if createdEvent.Budget.Valid {
-		f8, err := createdEvent.Budget.Float64Value()
-		if err != nil {
-			return err
-		}
-		budgetFloat64 = f8.Float64
-	}
-	var createdAtStr string
-	if createdEvent.CreatedAt.Valid {
-		createdAtStr = createdEvent.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
-	}
-
-	// Update the event with the created values
-	event.ID = createdEvent.ID.String()
-	event.IniDate = iniDateStr
-	event.EndDate = endDateStr
-	event.IniTime = iniTimeStr
-	event.EndTime = endTimeStr
-	event.Location = createdEvent.Location
-	event.Budget = budgetFloat64
-	event.Status = createdEvent.Status
-	event.CreatedAt = createdAtStr
-
-	return nil
+	}, nil
 }
 
-// UpdateEvent updates an existing event
-func (s *eventService) UpdateEvent(event *Event) error {
-	if event.ID == "" {
-		return ErrEventInvalid
-	}
-
-	// Parse UUID
-	var idBytes [16]byte
-	if len(event.ID) == 36 {
-		// Standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-		if len(event.ID) != 36 {
-			return ErrEventInvalid
-		}
-		// Remove hyphens
-		hexStr := event.ID[0:8] + event.ID[9:13] + event.ID[14:18] + event.ID[19:23] + event.ID[24:]
-		if len(hexStr) != 32 {
-			return ErrEventInvalid
-		}
-		// Decode hex
-		if _, err := hex.Decode(idBytes[:], []byte(hexStr)); err != nil {
-			return ErrEventInvalid
-		}
-	} else if len(event.ID) == 32 {
-		// Compact UUID format
-		if _, err := hex.Decode(idBytes[:], []byte(event.ID)); err != nil {
-			return ErrEventInvalid
-		}
-	} else {
-		return ErrEventInvalid
-	}
-	id := pgtype.UUID{Bytes: idBytes, Valid: true}
-
-	// Parse date values
-	iniDateTime, err := time.Parse("2006-01-02", event.IniDate)
+// Helper: convert service Event to db UpdateEventParams
+func (s *eventService) convertToDBEventForUpdate(event *Event, id pgtype.UUID) (*db.UpdateEventParams, error) {
+	iniDate, err := s.ParseDate(event.IniDate)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	endDateTime, err := time.Parse("2006-01-02", event.EndDate)
+	endDate, err := s.ParseDate(event.EndDate)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	// Parse time values
-	iniTimeParsed, err := time.Parse("15:04", event.IniTime)
+	iniTime, err := s.ParseTime(event.IniTime)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	endTimeParsed, err := time.Parse("15:04", event.EndTime)
+	endTime, err := s.ParseTime(event.EndTime)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Convert to pgtype values
-	iniDate := pgtype.Date{Time: iniDateTime, Valid: true}
-	endDate := pgtype.Date{Time: endDateTime, Valid: true}
-	iniTime := pgtype.Time{Microseconds: int64(iniTimeParsed.Hour()*3600+iniTimeParsed.Minute()*60) * 1000000, Valid: true}
-	endTime := pgtype.Time{Microseconds: int64(endTimeParsed.Hour()*3600+endTimeParsed.Minute()*60) * 1000000, Valid: true}
+	budget, err := s.convertBudgetToNumeric(event.Budget)
+	if err != nil {
+		return nil, err
+	}
 
-	// Convert budget to pgtype.Numeric (assuming 2 decimal places)
-	budgetInt := new(big.Int).Mul(big.NewInt(int64(event.Budget*100)), big.NewInt(1))
-	budget := pgtype.Numeric{Int: budgetInt, Exp: -2, Valid: true}
-
-	dbEvent := db.UpdateEventParams{
+	return &db.UpdateEventParams{
 		ID:       id,
 		Name:     event.Name,
 		IniDate:  iniDate,
@@ -359,78 +337,52 @@ func (s *eventService) UpdateEvent(event *Event) error {
 		Location: event.Location,
 		Budget:   budget,
 		Status:   event.Status,
-	}
-
-	_, err = s.querier.UpdateEvent(context.Background(), dbEvent)
-	return err
+	}, nil
 }
 
-// DeleteEvent deletes an event by ID
-func (s *eventService) DeleteEvent(eventID string) error {
-	if eventID == "" {
-		return ErrEventInvalid
+// Helper: convert db.Event to service Event
+func (s *eventService) convertDBEvent(event db.Event) *Event {
+	return &Event{
+		ID:        event.ID.String(),
+		Name:      event.Name,
+		IniDate:   s.FormatDate(event.IniDate),
+		EndDate:   s.FormatDate(event.EndDate),
+		IniTime:   s.FormatTime(event.IniTime),
+		EndTime:   s.FormatTime(event.EndTime),
+		Location:  event.Location,
+		Budget:    s.convertBudget(event.Budget),
+		Status:    event.Status,
+		CreatedAt: s.formatTimeStamp(event.CreatedAt),
 	}
-
-	// Parse UUID (same logic as in UpdateEvent)
-	var idBytes [16]byte
-	if len(eventID) == 36 {
-		// Standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-		if len(eventID) != 36 {
-			return ErrEventInvalid
-		}
-		// Remove hyphens
-		hexStr := eventID[0:8] + eventID[9:13] + eventID[14:18] + eventID[19:23] + eventID[24:]
-		if len(hexStr) != 32 {
-			return ErrEventInvalid
-		}
-		// Decode hex
-		if _, err := hex.Decode(idBytes[:], []byte(hexStr)); err != nil {
-			return ErrEventInvalid
-		}
-	} else if len(eventID) == 32 {
-		// Compact UUID format
-		if _, err := hex.Decode(idBytes[:], []byte(eventID)); err != nil {
-			return ErrEventInvalid
-		}
-	} else {
-		return ErrEventInvalid
-	}
-	id := pgtype.UUID{Bytes: idBytes, Valid: true}
-
-	return s.querier.DeleteEvent(context.Background(), id)
 }
 
-// Helper function to decode hex string
-func hexDecode(dst []byte, src []byte) (int, error) {
-	if len(src)%2 != 0 {
-		return 0, errors.New("hex string length must be even")
+// Helper: convert pgtype.Numeric to float64
+func (s *eventService) convertBudget(n pgtype.Numeric) float64 {
+	if !n.Valid {
+		return 0
 	}
-	if len(dst) < len(src)/2 {
-		return 0, errors.New("buffer too small")
+	if f, err := n.Float64Value(); err == nil {
+		return f.Float64
 	}
-	for i := 0; i < len(src); i += 2 {
-		h := hexToByte(src[i])
-		if h == 0xff {
-			return 0, errors.New("invalid hex digit: " + string(src[i]))
-		}
-		l := hexToByte(src[i+1])
-		if l == 0xff {
-			return 0, errors.New("invalid hex digit: " + string(src[i+1]))
-		}
-		dst[i/2] = h<<4 | l
-	}
-	return len(src) / 2, nil
+	return 0
 }
 
-// Helper function to convert hex character to value
-func hexToByte(c byte) byte {
-	switch {
-	case '0' <= c && c <= '9':
-		return c - '0'
-	case 'a' <= c && c <= 'f':
-		return c - 'a' + 10
-	case 'A' <= c && c <= 'F':
-		return c - 'A' + 10
+// Helper: format pgtype.Timestamptz to string (ISO 8601)
+func (s *eventService) formatTimeStamp(ts pgtype.Timestamptz) string {
+	if !ts.Valid {
+		return ""
 	}
-	return 0xff
+	return ts.Time.Format("2006-01-02T15:04:05Z07:00")
+}
+
+// Helper: copy created event values to original event
+func (s *eventService) copyCreatedEvent(event *Event, createdEvent db.Event) {
+	event.IniDate = s.FormatDate(createdEvent.IniDate)
+	event.EndDate = s.FormatDate(createdEvent.EndDate)
+	event.IniTime = s.FormatTime(createdEvent.IniTime)
+	event.EndTime = s.FormatTime(createdEvent.EndTime)
+	event.Location = createdEvent.Location
+	event.Budget = s.convertBudget(createdEvent.Budget)
+	event.Status = createdEvent.Status
+	event.CreatedAt = s.formatTimeStamp(createdEvent.CreatedAt)
 }

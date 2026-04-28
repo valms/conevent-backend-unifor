@@ -12,10 +12,21 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.47
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
   app:
     build: .
     ports:
       - "3000:3000"
+      - "9090:9090"
     environment:
       - DB_HOST=db
       - DB_PORT=5432
@@ -27,8 +38,14 @@ services:
       - SERVER_READ_TIMEOUT=5
       - SERVER_WRITE_TIMEOUT=10
       - SERVER_IDLE_TIMEOUT=120
+      - OBS_SERVICE_NAME=conevent-backend
+      - OBS_SERVICE_VERSION=1.0.0
+      - OBS_TRACE_EXPORTER=jaeger
+      - OBS_OTLP_ENDPOINT=jaeger:4317
+      - OBS_PROMETHEUS_PORT=9090
     depends_on:
       - db
+      - jaeger
 
 volumes:
   postgres_data:

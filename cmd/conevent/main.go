@@ -4,12 +4,15 @@ import (
 	"conevent-backend/config"
 	"conevent-backend/internal/api"
 	"conevent-backend/internal/db"
+	"conevent-backend/internal/observability"
 	"conevent-backend/internal/service"
 	"context"
 	"log"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,8 +36,62 @@ func main() {
 	// Create service layer
 	eventService := service.NewEventService(querier)
 
+	// Initialize observability
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	obsConfig := observability.Config{
+		ServiceName:    cfg.Observability.ServiceName,
+		ServiceVersion: cfg.Observability.ServiceVersion,
+		Exporter:       cfg.Observability.TraceExporter,
+		OTLPEndpoint:   cfg.Observability.OTLPEndpoint,
+		PrometheusPort: cfg.Observability.PrometheusPort,
+	}
+
+	tp, err := observability.InitTracing(ctx, obsConfig)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize tracing: %v", err)
+	}
+
+	mp, reg, err := observability.InitMetrics(ctx, obsConfig)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize metrics: %v", err)
+	}
+
+	if err := observability.InitCustomMetrics(obsConfig.ServiceName); err != nil {
+		log.Printf("Warning: Failed to initialize custom metrics: %v", err)
+	}
+
+	businessMetrics, err := observability.NewBusinessMetrics(obsConfig.ServiceName)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize business metrics: %v", err)
+	}
+
+	defer func() {
+		if tp != nil {
+			if err := tp.Shutdown(context.Background()); err != nil {
+				log.Printf("Error shutting down tracer provider: %v", err)
+			}
+		}
+		if mp != nil {
+			if err := mp.Shutdown(context.Background()); err != nil {
+				log.Printf("Error shutting down meter provider: %v", err)
+			}
+		}
+	}()
+
+	// Start metrics HTTP server in a goroutine
+	go func() {
+		log.Printf("Starting metrics server on port %s", obsConfig.PrometheusPort)
+		if err := observability.StartHTTPServer(obsConfig.PrometheusPort, reg); err != nil {
+			log.Printf("Error starting metrics server: %v", err)
+		} else {
+			log.Printf("Metrics server stopped")
+		}
+	}()
+
 	// Create handler layer
-	eventHandler := api.NewEventHandler(eventService)
+	eventHandler := api.NewEventHandler(eventService, businessMetrics)
 
 	// Create Fiber app with timeouts from config
 	app := fiber.New(fiber.Config{
@@ -44,7 +101,13 @@ func main() {
 	})
 
 	// Middleware
+	app.Use(recover.New())
 	app.Use(logger.New())
+	obsConfigMetrics := observability.NewMetricsMiddleware()
+	app.Use(obsConfigMetrics.Handle)
+
+	// Setup observability tracing
+	observability.SetupApp(app, obsConfig.ServiceName)
 
 	// Routes - handlers should only parse requests and call services
 	app.Get("/health", api.HealthCheck)

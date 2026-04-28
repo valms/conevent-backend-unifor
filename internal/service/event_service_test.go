@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"os"
 	"testing"
 
 	"conevent-backend/config"
 	"conevent-backend/internal/db"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -280,4 +282,139 @@ func TestEventService_CRUD(t *testing.T) {
 		_, err = service.GetEvent(eventID)
 		assert.Error(t, err, "GetEvent should return an error for deleted event")
 	})
+}
+
+// TestUpdateEvent_Error validates error handling in UpdateEvent
+func TestUpdateEvent_Error(t *testing.T) {
+	dbpool := newTestPool(t)
+	defer dbpool.Close()
+
+	querier := db.New(dbpool)
+	service := NewEventService(querier)
+
+	// Test with empty ID
+	event := &Event{
+		ID:       "",
+		Name:     "Test Event",
+		IniDate:  "2026-05-01",
+		EndDate:  "2026-05-02",
+		IniTime:  "09:00",
+		EndTime:  "17:00",
+		Location: "Test Location",
+		Budget:   1000.50,
+		Status:   "Planejamento",
+	}
+
+	err := service.UpdateEvent(event)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEventInvalid)
+
+	// Test with invalid UUID format
+	event.ID = "invalid-uuid"
+	err = service.UpdateEvent(event)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEventInvalid)
+}
+
+// TestParseUUID_Error tests UUID parsing edge cases
+func TestParseUUID_Error(t *testing.T) {
+	dbpool := newTestPool(t)
+	defer dbpool.Close()
+
+	querier := db.New(dbpool)
+	service := NewEventService(querier)
+
+	// Test empty string
+	_, err := service.(*eventService).ParseUUID("")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEventInvalid)
+
+	// Test too short
+	_, err = service.(*eventService).ParseUUID("123")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEventInvalid)
+
+	// Test invalid hex
+	_, err = service.(*eventService).ParseUUID("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrEventInvalid)
+
+	// Test valid UUID formats
+	id1, err := service.(*eventService).ParseUUID("550e8400-e29b-41d4-a716-446655440000")
+	require.NoError(t, err)
+	assert.True(t, id1.Valid)
+
+	id2, err := service.(*eventService).ParseUUID("550e8400e29b41d4a716446655440000")
+	require.NoError(t, err)
+	assert.True(t, id2.Valid)
+
+	// Both should produce the same UUID
+	assert.Equal(t, id1, id2)
+}
+
+// TestFormatDate tests date formatting
+func TestFormatDate(t *testing.T) {
+	dbpool := newTestPool(t)
+	defer dbpool.Close()
+
+	querier := db.New(dbpool)
+	service := NewEventService(querier)
+
+	// Test valid date
+	date, err := service.(*eventService).ParseDate("2026-05-15")
+	require.NoError(t, err)
+	assert.True(t, date.Valid)
+	assert.Equal(t, "2026-05-15", service.(*eventService).FormatDate(date))
+
+	// Test empty string
+	date, err = service.(*eventService).ParseDate("")
+	require.NoError(t, err)
+	assert.False(t, date.Valid)
+	assert.Equal(t, "", service.(*eventService).FormatDate(date))
+}
+
+// TestFormatTime tests time formatting
+func TestFormatTime(t *testing.T) {
+	dbpool := newTestPool(t)
+	defer dbpool.Close()
+
+	querier := db.New(dbpool)
+	service := NewEventService(querier)
+
+	// Test valid time
+	timeVal, err := service.(*eventService).ParseTime("14:30")
+	require.NoError(t, err)
+	assert.True(t, timeVal.Valid)
+	assert.Equal(t, "14:30", service.(*eventService).FormatTime(timeVal))
+
+	// Test empty string
+	timeVal, err = service.(*eventService).ParseTime("")
+	require.NoError(t, err)
+	assert.False(t, timeVal.Valid)
+	assert.Equal(t, "", service.(*eventService).FormatTime(timeVal))
+}
+
+// TestConvertBudget tests budget conversion
+func TestConvertBudget(t *testing.T) {
+	dbpool := newTestPool(t)
+	defer dbpool.Close()
+
+	querier := db.New(dbpool)
+	service := NewEventService(querier)
+
+	// Test zero budget
+	assert.Equal(t, 0.0, service.(*eventService).convertBudget(pgtype.Numeric{}))
+
+	// Test positive budget
+	var budget pgtype.Numeric
+	budget.Int = big.NewInt(12345)
+	budget.Exp = -2
+	budget.Valid = true
+	assert.Equal(t, 123.45, service.(*eventService).convertBudget(budget))
+
+	// Test negative budget
+	budget.Int = big.NewInt(-9876)
+	budget.Exp = -2
+	budget.Valid = true
+	assert.Equal(t, -98.76, service.(*eventService).convertBudget(budget))
 }

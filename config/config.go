@@ -10,8 +10,18 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
+	Server        ServerConfig
+	Database      DatabaseConfig
+	Observability ObservabilityConfig
+}
+
+// ObservabilityConfig holds observability (tracing/metrics) configuration
+type ObservabilityConfig struct {
+	ServiceName    string
+	ServiceVersion string
+	TraceExporter  string
+	OTLPEndpoint   string
+	PrometheusPort string
 }
 
 // DatabaseURL returns the formatted PostgreSQL connection string
@@ -59,6 +69,13 @@ func LoadConfig() (*Config, error) {
 			Name:     getEnv("DB_NAME", ""),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
+		Observability: ObservabilityConfig{
+			ServiceName:    getEnv("OBS_SERVICE_NAME", "conevent-backend"),
+			ServiceVersion: getEnv("OBS_SERVICE_VERSION", "1.0.0"),
+			TraceExporter:  getEnv("OBS_TRACE_EXPORTER", "jaeger"),
+			OTLPEndpoint:   getEnv("OBS_OTLP_ENDPOINT", "localhost:4317"),
+			PrometheusPort: getEnv("OBS_PROMETHEUS_PORT", "9090"),
+		},
 	}
 
 	// Validate required configuration
@@ -85,6 +102,12 @@ func (c *Config) validate() error {
 	}
 	if c.Database.Name == "" {
 		return fmt.Errorf("DB_NAME is required")
+	}
+	if c.Observability.TraceExporter == "" {
+		return fmt.Errorf("OBS_TRACE_EXPORTER is required")
+	}
+	if c.Observability.OTLPEndpoint == "" && c.Observability.TraceExporter != "stdout" {
+		return fmt.Errorf("OBS_OTLP_ENDPOINT is required")
 	}
 	return nil
 }

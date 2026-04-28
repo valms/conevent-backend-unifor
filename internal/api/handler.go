@@ -1,25 +1,30 @@
 package api
 
 import (
+	"time"
+
 	"github.com/gofiber/fiber/v2"
 
+	"conevent-backend/internal/observability"
 	"conevent-backend/internal/service"
 )
 
-// EventHandler handles HTTP requests for event management
 type EventHandler struct {
-	service service.EventService
+	service         service.EventService
+	businessMetrics *observability.BusinessMetrics
 }
 
-// NewEventHandler creates a new EventHandler instance
-func NewEventHandler(s service.EventService) *EventHandler {
-	return &EventHandler{service: s}
+func NewEventHandler(s service.EventService, bm *observability.BusinessMetrics) *EventHandler {
+	return &EventHandler{service: s, businessMetrics: bm}
 }
 
-// GetEvent returns a single event by ID
 func (h *EventHandler) GetEvent(c *fiber.Ctx) error {
+	start := time.Now()
 	eventID := c.Params("id")
 	if eventID == "" {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordGetEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Event ID is required",
 		})
@@ -27,48 +32,72 @@ func (h *EventHandler) GetEvent(c *fiber.Ctx) error {
 
 	event, err := h.service.GetEvent(eventID)
 	if err != nil {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordGetEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
 		})
 	}
 
+	if h.businessMetrics != nil {
+		h.businessMetrics.RecordGetEvent(c.UserContext(), time.Since(start), true)
+	}
 	return c.JSON(event)
 }
 
-// ListEvents returns a list of all events
 func (h *EventHandler) ListEvents(c *fiber.Ctx) error {
+	start := time.Now()
 	events, err := h.service.ListEvents()
 	if err != nil {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordListEvents(c.UserContext(), time.Since(start), 0)
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
 		})
 	}
 
+	if h.businessMetrics != nil {
+		h.businessMetrics.RecordListEvents(c.UserContext(), time.Since(start), len(events))
+	}
 	return c.JSON(events)
 }
 
-// CreateEvent creates a new event
 func (h *EventHandler) CreateEvent(c *fiber.Ctx) error {
+	start := time.Now()
 	var event service.Event
 	if err := c.BodyParser(&event); err != nil {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordCreateEvent(c.UserContext(), time.Since(start))
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Invalid request body",
 		})
 	}
 
 	if err := h.service.CreateEvent(&event); err != nil {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordCreateEvent(c.UserContext(), time.Since(start))
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
 		})
 	}
 
+	if h.businessMetrics != nil {
+		h.businessMetrics.RecordCreateEvent(c.UserContext(), time.Since(start))
+	}
 	return c.Status(fiber.StatusCreated).JSON(event)
 }
 
-// UpdateEvent updates an existing event
 func (h *EventHandler) UpdateEvent(c *fiber.Ctx) error {
+	start := time.Now()
 	eventID := c.Params("id")
 	if eventID == "" {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordUpdateEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Event ID is required",
 		})
@@ -76,13 +105,18 @@ func (h *EventHandler) UpdateEvent(c *fiber.Ctx) error {
 
 	var event service.Event
 	if err := c.BodyParser(&event); err != nil {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordUpdateEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Invalid request body",
 		})
 	}
 
-	// Ensure the ID from URL matches the ID in body (if provided)
 	if event.ID != "" && event.ID != eventID {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordUpdateEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Event ID mismatch",
 		})
@@ -90,33 +124,47 @@ func (h *EventHandler) UpdateEvent(c *fiber.Ctx) error {
 	event.ID = eventID
 
 	if err := h.service.UpdateEvent(&event); err != nil {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordUpdateEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
 		})
 	}
 
+	if h.businessMetrics != nil {
+		h.businessMetrics.RecordUpdateEvent(c.UserContext(), time.Since(start), true)
+	}
 	return c.JSON(event)
 }
 
-// DeleteEvent deletes an event by ID
 func (h *EventHandler) DeleteEvent(c *fiber.Ctx) error {
+	start := time.Now()
 	eventID := c.Params("id")
 	if eventID == "" {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordDeleteEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Event ID is required",
 		})
 	}
 
 	if err := h.service.DeleteEvent(eventID); err != nil {
+		if h.businessMetrics != nil {
+			h.businessMetrics.RecordDeleteEvent(c.UserContext(), time.Since(start), false)
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
 		})
 	}
 
+	if h.businessMetrics != nil {
+		h.businessMetrics.RecordDeleteEvent(c.UserContext(), time.Since(start), true)
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// HealthCheck returns a simple health check response
 func HealthCheck(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status":  "ok",
