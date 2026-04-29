@@ -1,5 +1,7 @@
 # Conevent Backend
 
+Read in English: [README.en.md](README.en.md)
+
 Backend da aplicação Conevent, desenvolvido em Go com Fiber, PostgreSQL, sqlc e OpenTelemetry. A API expõe um CRUD de eventos, documentação OpenAPI/Swagger, métricas Prometheus e traces enviados para Jaeger.
 
 ## Funcionalidades
@@ -160,6 +162,15 @@ No Kubernetes, o Service `conevent` expõe a porta `9090` como `metrics`, e o Pr
 ### Logs
 
 Os logs da aplicação são escritos em stdout/stderr. No Kubernetes, o Promtail coleta logs dos pods e envia para Loki. O Grafana já provisiona fontes de dados para Prometheus, Loki e Jaeger.
+
+No `DaemonSet` do Promtail, a variável `HOSTNAME` é preenchida com `spec.nodeName`. Isso garante que a descoberta Kubernetes filtre pelo nome real do node e encontre os arquivos em `/var/log/pods`. Em clusters kind/containerd, o Promtail também monta `/var/lib/containerd` e usa o estágio `cri` para interpretar o formato dos logs.
+
+Para validar a ingestão no Loki:
+
+```bash
+kubectl port-forward svc/loki 3100:3100
+curl -G 'http://127.0.0.1:3100/loki/api/v1/query_range' --data-urlencode 'query={app="conevent"}' --data-urlencode 'limit=5'
+```
 
 ### Grafana
 
